@@ -1302,21 +1302,27 @@ class RtpSession(
                             Log.i(TAG, "Diag: $line")
                         }
 
-                        // Phase 3: Active capture PCMs + hw_params
+                        // Phase 3: Active capture/playback PCMs + hw_params (all cards)
                         val pcmCmd = buildString {
-                            append("echo '=== capture PCMs ==='; ")
-                            append("for f in /proc/asound/card0/pcm*c/sub0/status; do ")
-                            append("s=\$(head -1 \$f 2>/dev/null); d=\${f%/status}; n=\${d##*/}; ")
-                            append("echo \"\$n: \$s\"; ")
+                            append("echo '=== capture PCMs (all cards) ==='; ")
+                            append("for f in /proc/asound/card*/pcm*c/sub0/status; do ")
+                            append("s=\$(head -1 \$f 2>/dev/null); d=\${f%/status}; ")
+                            append("card=\${f#/proc/asound/}; card=\${card%%/*}; ")
+                            append("pcm=\${d##*/}; ")
+                            append("echo \"\$card/\$pcm: \$s\"; ")
                             append("if echo \"\$s\" | grep -q RUNNING; then ")
                             append("echo \"  hw: \$(cat \${d}/hw_params 2>/dev/null | head -5 | tr '\\n' ' ')\"; ")
+                            append("name=\$(cat \${d%/sub0}/info 2>/dev/null | grep '^name:' | head -1); ")
+                            append("[ -n \"\$name\" ] && echo \"  \$name\"; ")
                             append("fi; done; ")
-                            // Also dump playback PCMs
-                            append("echo '=== playback PCMs ==='; ")
-                            append("for f in /proc/asound/card0/pcm*p/sub0/status; do ")
-                            append("s=\$(head -1 \$f 2>/dev/null); d=\${f%/status}; n=\${d##*/}; ")
+                            // Also dump playback PCMs (all cards)
+                            append("echo '=== playback PCMs (all cards) ==='; ")
+                            append("for f in /proc/asound/card*/pcm*p/sub0/status; do ")
+                            append("s=\$(head -1 \$f 2>/dev/null); d=\${f%/status}; ")
+                            append("card=\${f#/proc/asound/}; card=\${card%%/*}; ")
+                            append("pcm=\${d##*/}; ")
                             append("if echo \"\$s\" | grep -q RUNNING; then ")
-                            append("echo \"\$n: \$s  hw: \$(cat \${d}/hw_params 2>/dev/null | head -3 | tr '\\n' ' ')\"; ")
+                            append("echo \"\$card/\$pcm: \$s  hw: \$(cat \${d}/hw_params 2>/dev/null | head -3 | tr '\\n' ' ')\"; ")
                             append("fi; done")
                         }
                         val pcmResult = RootShell.execForOutput(pcmCmd, timeoutMs = 3000)
@@ -1348,37 +1354,47 @@ class RtpSession(
                         // Phase 7: Probe ALSA capture PCMs for non-zero audio data.
                         // All AudioRecord sources return silence (rawCapRMS=0) on this
                         // device.  This probe reads raw bytes from each RUNNING capture
-                        // PCM via /proc/asound to find which device has modem downlink
-                        // audio (for future direct ALSA capture implementation).
+                        // PCM across ALL cards to find which device has modem downlink
+                        // audio.  Card 1 (aboxvdma) may carry modem voice data.
                         if (running.get()) {
                             val probeCmd = buildString {
-                                append("echo '=== ALSA capture PCM probe ==='; ")
-                                // List all capture PCM devices with their card/device IDs
-                                append("for d in /proc/asound/card0/pcm*c; do ")
-                                append("  n=\${d##*/}; s=\$(head -1 \$d/sub0/status 2>/dev/null); ")
-                                append("  echo \"\$n: \$s\"; ")
+                                append("echo '=== ALSA capture PCM probe (all cards) ==='; ")
+                                append("if [ ! -x /data/local/tmp/tinycap ]; then ")
+                                append("  echo 'tinycap not found'; ")
+                                append("else ")
+                                // Iterate all capture PCMs across all cards
+                                append("for d in /proc/asound/card*/pcm*c; do ")
+                                append("  [ -d \"\$d/sub0\" ] || continue; ")
+                                append("  s=\$(head -1 \$d/sub0/status 2>/dev/null); ")
+                                append("  card=\${d#/proc/asound/}; card=\${card%%/*}; ")
+                                append("  cardnum=\${card#card}; ")
+                                append("  pcm=\${d##*/}; devnum=\${pcm#pcm}; devnum=\${devnum%c}; ")
+                                append("  name=\$(cat \$d/info 2>/dev/null | grep '^name:' | head -1 | cut -d: -f2-); ")
+                                append("  echo \"\$card/\$pcm:\$name status=\$s\"; ")
                                 append("  if echo \"\$s\" | grep -q RUNNING; then ")
-                                // Read hw_params to know format/channels/rate
-                                append("    echo \"  hw_params: \$(cat \$d/sub0/hw_params 2>/dev/null | tr '\\n' ' ' | head -c 200)\"; ")
-                                // Try to read from the PCM device and check for non-zero data.
-                                // Extract device number from pcmNNNc format.
-                                append("    devnum=\${n#pcm}; devnum=\${devnum%c}; ")
-                                // Use tinycap if available, otherwise try dd from device node
-                                append("    if [ -x /data/local/tmp/tinycap ]; then ")
-                                append("      timeout 1 /data/local/tmp/tinycap /data/local/tmp/probe_\$n.raw -D 0 -d \$devnum -c 4 -r 48000 -b 16 -T 1 2>&1; ")
-                                append("      if [ -f /data/local/tmp/probe_\$n.raw ]; then ")
-                                append("        sz=\$(wc -c < /data/local/tmp/probe_\$n.raw); ")
-                                append("        nz=\$(od -An -tx1 /data/local/tmp/probe_\$n.raw | tr ' ' '\\n' | grep -v '^00\$' | grep -v '^\$' | wc -l); ")
-                                append("        echo \"  probe: \${sz}B, \${nz} non-zero bytes\"; ")
-                                append("        rm -f /data/local/tmp/probe_\$n.raw; ")
-                                append("      fi; ")
+                                // Parse actual hw_params for this PCM
+                                append("    ch=\$(cat \$d/sub0/hw_params 2>/dev/null | grep '^channels:' | awk '{print \$2}'); ")
+                                append("    rate=\$(cat \$d/sub0/hw_params 2>/dev/null | grep '^rate:' | awk '{print \$2}'); ")
+                                append("    fmt=\$(cat \$d/sub0/hw_params 2>/dev/null | grep '^format:' | awk '{print \$2}'); ")
+                                append("    bits=16; echo \"\$fmt\" | grep -q S32 && bits=32; ")
+                                append("    echo \"  hw: fmt=\$fmt ch=\$ch rate=\$rate bits=\$bits\"; ")
+                                // Capture 1 second of raw audio with actual params
+                                append("    timeout 2 /data/local/tmp/tinycap /data/local/tmp/probe_\${cardnum}_\${devnum}.raw ")
+                                append("-D \$cardnum -d \$devnum -c \${ch:-2} -r \${rate:-48000} -b \${bits} -p 480 -n 4 2>&1 | head -2; ")
+                                append("    f=/data/local/tmp/probe_\${cardnum}_\${devnum}.raw; ")
+                                append("    if [ -f \"\$f\" ] && [ -s \"\$f\" ]; then ")
+                                append("      sz=\$(wc -c < \"\$f\"); ")
+                                append("      nz=\$(od -An -tx1 \"\$f\" | tr ' ' '\\n' | grep -cv '^00\$\\|^\$'); ")
+                                append("      echo \"  probe: \${sz}B, \${nz} non-zero bytes\"; ")
+                                append("      rm -f \"\$f\"; ")
                                 append("    else ")
-                                append("      echo '  tinycap not found — push to /data/local/tmp/tinycap'; ")
+                                append("      echo '  probe: no data captured'; ")
                                 append("    fi; ")
                                 append("  fi; ")
-                                append("done")
+                                append("done; ")
+                                append("fi")
                             }
-                            val probeResult = RootShell.execForOutput(probeCmd, timeoutMs = 15000)
+                            val probeResult = RootShell.execForOutput(probeCmd, timeoutMs = 30000)
                             for (line in probeResult.lines().filter { it.isNotBlank() }) {
                                 Log.i(TAG, "Diag: $line")
                             }

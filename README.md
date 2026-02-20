@@ -2,6 +2,10 @@
 
 Android app that bridges GSM calls (local SIM) with the CallAgent SIP/Asterisk server.
 
+| Dialer | SIP Registration |
+|--------|-----------------|
+| <img src="../gsm2sip1.jpg" width="300"> | <img src="../gsm2sip2.jpg" width="300"> |
+
 ## How It Works
 
 A dedicated rooted Android phone with a local SIM card acts as a SIP-to-GSM gateway:
@@ -32,8 +36,7 @@ chmod +x build.sh
 ```
 
 Outputs:
-- `gateway.apk` — the Android app
-- `gateway-magisk.zip` — Magisk module for audio permissions
+- `gateway-magisk.zip` — Magisk module containing the APK, permissions, and audio tools (tinymix, tinycap). This is the only file you need to install.
 
 ## Device Setup
 
