@@ -1248,6 +1248,7 @@ class RtpSession(
      * Phase 2: mixer_paths.xml incall_music voice path definitions
      * Phase 3: /proc/asound capture/playback PCM status
      * Phase 6: Delayed NSRC re-check (t+5s)
+     * Phase 7: ALSA capture PCM probe (tinycap, if available)
      */
     private fun logCaptureDiagnostics(record: AudioRecord) {
         try {
@@ -1340,6 +1341,45 @@ class RtpSession(
                             }
                             val recheckResult = RootShell.execForOutput(recheck, timeoutMs = 8000)
                             for (line in recheckResult.lines().filter { it.isNotBlank() }) {
+                                Log.i(TAG, "Diag: $line")
+                            }
+                        }
+
+                        // Phase 7: Probe ALSA capture PCMs for non-zero audio data.
+                        // All AudioRecord sources return silence (rawCapRMS=0) on this
+                        // device.  This probe reads raw bytes from each RUNNING capture
+                        // PCM via /proc/asound to find which device has modem downlink
+                        // audio (for future direct ALSA capture implementation).
+                        if (running.get()) {
+                            val probeCmd = buildString {
+                                append("echo '=== ALSA capture PCM probe ==='; ")
+                                // List all capture PCM devices with their card/device IDs
+                                append("for d in /proc/asound/card0/pcm*c; do ")
+                                append("  n=\${d##*/}; s=\$(head -1 \$d/sub0/status 2>/dev/null); ")
+                                append("  echo \"\$n: \$s\"; ")
+                                append("  if echo \"\$s\" | grep -q RUNNING; then ")
+                                // Read hw_params to know format/channels/rate
+                                append("    echo \"  hw_params: \$(cat \$d/sub0/hw_params 2>/dev/null | tr '\\n' ' ' | head -c 200)\"; ")
+                                // Try to read from the PCM device and check for non-zero data.
+                                // Extract device number from pcmNNNc format.
+                                append("    devnum=\${n#pcm}; devnum=\${devnum%c}; ")
+                                // Use tinycap if available, otherwise try dd from device node
+                                append("    if [ -x /data/local/tmp/tinycap ]; then ")
+                                append("      timeout 1 /data/local/tmp/tinycap /data/local/tmp/probe_\$n.raw -D 0 -d \$devnum -c 4 -r 48000 -b 16 -T 1 2>&1; ")
+                                append("      if [ -f /data/local/tmp/probe_\$n.raw ]; then ")
+                                append("        sz=\$(wc -c < /data/local/tmp/probe_\$n.raw); ")
+                                append("        nz=\$(od -An -tx1 /data/local/tmp/probe_\$n.raw | tr ' ' '\\n' | grep -v '^00\$' | grep -v '^\$' | wc -l); ")
+                                append("        echo \"  probe: \${sz}B, \${nz} non-zero bytes\"; ")
+                                append("        rm -f /data/local/tmp/probe_\$n.raw; ")
+                                append("      fi; ")
+                                append("    else ")
+                                append("      echo '  tinycap not found — push to /data/local/tmp/tinycap'; ")
+                                append("    fi; ")
+                                append("  fi; ")
+                                append("done")
+                            }
+                            val probeResult = RootShell.execForOutput(probeCmd, timeoutMs = 15000)
+                            for (line in probeResult.lines().filter { it.isNotBlank() }) {
                                 Log.i(TAG, "Diag: $line")
                             }
                         }

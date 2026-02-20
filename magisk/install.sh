@@ -75,9 +75,12 @@ set_perm_recursive $MODPATH 0 0 0755 0644
 if [ -d "$PRIV_DIR" ]; then
     set_perm_recursive $MODPATH/system/priv-app 0 0 0755 0644
 fi
-# tinymix needs execute permission
+# tinymix/tinycap need execute permission
 if [ -f "$MODPATH/tinymix" ]; then
     chmod 755 "$MODPATH/tinymix"
+fi
+if [ -f "$MODPATH/tinycap" ]; then
+    chmod 755 "$MODPATH/tinycap"
 fi
 if [ -f "$MODPATH/system/bin/tinymix" ]; then
     chmod 755 "$MODPATH/system/bin/tinymix"

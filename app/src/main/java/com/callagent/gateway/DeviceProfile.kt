@@ -387,9 +387,9 @@ data class DeviceProfile(
                 append("echo '=== NSRC/Bridge ==='; ")
                 append("tinymix 2>&1 | grep -iE '(nsrc|bridge)' | head -20")
             },
-            musicVolPercent = 30,  // v2.8.42@80%+4x=loud(feedback), v2.8.44@15%+2x=silent(wrong NSRC)
+            musicVolPercent = 40,  // v2.8.45@30%+2x=audible but quiet. Raise for clarity.
             captureGain = 10,      // VOICE_RECOGNITION captures very quietly (rawCapRMS~2)
-            playbackGain = 2,      // 30%+2x = moderate, SIFS0 only = no feedback
+            playbackGain = 2,      // 40%+2x = moderate, SIFS0 only = no feedback
             noiseGateThreshold = 20,  // Lower gate: VOICE_RECOGNITION raw level is ~2-50
             echoGateThreshold = 300,
             doubleTalkRatio = 1.5f,

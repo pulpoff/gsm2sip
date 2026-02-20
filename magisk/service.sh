@@ -141,6 +141,23 @@ if [ "$TINYMIX_FOUND" = "false" ]; then
     log -t "$TAG" "tinymix: NOT FOUND — ABOX mixer controls will not work"
 fi
 
+# ── Ensure tinycap is available ───────────────────────
+# tinycap is needed to probe ALSA capture PCMs for modem downlink audio.
+# Same deployment strategy as tinymix: /data/local/tmp/ for SELinux compat.
+if [ -f "$MODDIR/tinycap" ]; then
+    case "$DEVICE_ABI" in
+        arm64*|aarch64*)
+            cp "$MODDIR/tinycap" /data/local/tmp/tinycap
+            chmod 755 /data/local/tmp/tinycap
+            chown root:root /data/local/tmp/tinycap
+            log -t "$TAG" "tinycap: installed ARM64 binary to /data/local/tmp/tinycap"
+            ;;
+        *)
+            log -t "$TAG" "tinycap: skipped (device ABI=$DEVICE_ABI, bundled binary is ARM64)"
+            ;;
+    esac
+fi
+
 # ── Log ALSA card info for diagnostics ────────────────
 ALSA_CARDS=$(cat /proc/asound/cards 2>/dev/null)
 if [ -n "$ALSA_CARDS" ]; then
