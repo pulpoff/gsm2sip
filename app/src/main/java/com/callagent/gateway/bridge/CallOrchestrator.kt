@@ -496,11 +496,14 @@ class CallOrchestrator(
 
             activeGsmCall?.let { call ->
                 try {
-                    if (GsmCallManager.isCallActive) GsmCallManager.hangupCall(call)
+                    // Always disconnect — not just when ACTIVE.  If the SIP
+                    // call fails before GSM is answered, the ringing GSM call
+                    // was left dangling (S4 Mini: "second call never answered").
+                    // Call.disconnect() works for RINGING, DIALING, and ACTIVE.
+                    call.disconnect()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error hanging up GSM: ${e.message}")
+                    Log.e(TAG, "Error disconnecting GSM: ${e.message}")
                 }
-                Unit
             }
             activeGsmCall = null
             pendingRtpAddr = null
@@ -598,9 +601,7 @@ class CallOrchestrator(
         } catch (_: Exception) {}
         activeSipCall = null
         try {
-            activeGsmCall?.let {
-                if (GsmCallManager.isCallActive) GsmCallManager.hangupCall(it)
-            }
+            activeGsmCall?.disconnect()
         } catch (_: Exception) {}
         activeGsmCall = null
         pendingRtpAddr = null

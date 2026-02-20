@@ -267,16 +267,27 @@ data class DeviceProfile(
                 append("tinymix 'LINEOUT2 Volume' 0 2>/dev/null")
             },
             mixerRestoreCmd = buildString {
+                // Unmute voice RX (restore speaker audio)
                 append("tinymix 'Voice Rx Device Mute' 0 2>/dev/null; ")
                 append("tinymix 'Voice Rx Mute' 0 2>/dev/null; ")
                 append("tinymix 'Voip Rx Device Mute' 0 2>/dev/null; ")
+                // Unmute voice TX (was muted during bridge to block physical mic).
+                // CRITICAL: must restore to 0 or subsequent calls can't set up
+                // the voice TX path (S4 Mini: "second call never answered").
+                append("tinymix 'Voice Tx Device Mute' 0 2>/dev/null; ")
+                append("tinymix 'Voice Tx Mute' 0 2>/dev/null; ")
+                // Reset incall_music mixer — prevents stale state on next call.
+                // HAL may not reset these automatically on call end.
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 0 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 0 2>/dev/null; ")
+                // Restore mic path: DEC MUX back to ADC, MICBIAS re-enabled
                 append("tinymix 'DEC1 MUX' 'ADC1' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ADC2' 2>/dev/null; ")
                 append("tinymix 'DEC3 MUX' 'ADC3' 2>/dev/null; ")
                 append("tinymix 'MICBIAS1 CAPLESS Switch' 1 2>/dev/null; ")
                 append("tinymix 'MICBIAS2 CAPLESS Switch' 1 2>/dev/null; ")
                 append("tinymix 'MICBIAS3 CAPLESS Switch' 1 2>/dev/null; ")
-                append("tinymix 'Voice Tx Device Mute' 0 2>/dev/null; ")
+                // Restore volumes
                 append("tinymix 'DEC1 Volume' 84 2>/dev/null; ")
                 append("tinymix 'DEC2 Volume' 84 2>/dev/null; ")
                 append("tinymix 'DEC3 Volume' 84 2>/dev/null; ")
@@ -289,6 +300,7 @@ data class DeviceProfile(
                 append("tinymix 'Speaker Boost Volume' 5 2>/dev/null; ")
                 append("tinymix 'LINEOUT1 Volume' 100 2>/dev/null; ")
                 append("tinymix 'LINEOUT2 Volume' 100 2>/dev/null; ")
+                // Restore echo reference
                 append("tinymix 291 1 2>/dev/null")
             },
             mixerIncallMusicCmd = buildString {
@@ -354,7 +366,17 @@ data class DeviceProfile(
             // ABOX mixer controls — exact names from /vendor/etc/mixer_paths.xml.
             // The control names are CASE SENSITIVE — "Bridge" not "BRIDGE".
             // ALL ABOX controls are on card 0 (default) — no -D flag needed.
-            mixerSetupCmd = "",
+            // v2.8.49: Attempted speaker mute via CS35L41/Madera/ABOX controls.
+            // v2.8.50: SPK_SCAN confirmed NO speaker amp controls exist on this
+            // LineageOS firmware.  Only HPOUT* (headphone) volumes are exposed.
+            // ABOX UAIF1 SPK=RESERVED disconnected the speaker amp I2S bus which
+            // KILLED the entire voice path (caller heard nothing).  The CS35L41
+            // amp is controlled through missing kernel control (ABOX Spk AmpL Power).
+            // No ALSA-level speaker mute is possible on this firmware.
+            // Keep discovery-only scan for diagnostics.
+            mixerSetupCmd = buildString {
+                append("echo 'SPK_SCAN:'; tinymix 2>&1 | grep -iE '(spk|speaker|amp.*(switch|gain|vol)|out[1-6][lr].*(switch|vol))' | head -20")
+            },
             // Restore NSRC0 and NSRC1 to UAIF0 (mic/codec → modem TX) on call end.
             // v2.8.42 confirmed enum names work — 'SIFS0' sets correctly.
             mixerRestoreCmd = buildString {

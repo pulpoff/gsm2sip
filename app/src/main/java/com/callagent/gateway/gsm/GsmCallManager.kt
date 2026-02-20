@@ -108,6 +108,14 @@ object GsmCallManager {
         activeCallState = state
 
         when (state) {
+            Call.STATE_RINGING -> {
+                // Handle calls that arrive as STATE_NEW in onCallAdded and
+                // transition to RINGING via the callback.  Without this,
+                // the orchestrator never learns about the incoming call.
+                val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
+                Log.i(TAG, "GSM call ringing: $number (via state change)")
+                listener?.onIncomingGsmCall(call, number)
+            }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active")
                 configureAudioBridge()
@@ -205,6 +213,12 @@ object GsmCallManager {
                 }
 
                 audioManager?.let { am ->
+                    // Do NOT set isMicrophoneMute = true here!
+                    // v2.8.50: Samsung Exynos HAL interprets mic mute as "mute
+                    // entire voice uplink to modem", which blocks NSRC-injected
+                    // AudioTrack audio from reaching the caller.
+                    // MSM8930: mic muting is handled at ALSA level (DEC MUX=ZERO,
+                    // MICBIAS=0) in mixerSetupCmd — no need for API-level mute.
                     am.isMicrophoneMute = false
                     enforceVolumes(am)
 
@@ -338,7 +352,9 @@ object GsmCallManager {
             appLog("Mixer BEFORE: $before")
 
             // Step 2: Run mixer setup commands (all ABOX controls on card 0)
-            RootShell.exec(resolvedSetup, timeoutMs = 8000)
+            // Use execForOutput to capture discovery/diagnostic output from setup commands
+            val setupOutput = RootShell.execForOutput(resolvedSetup, timeoutMs = 8000)
+            if (setupOutput.isNotBlank()) appLog("Mixer setup: $setupOutput")
 
             // Step 3: Readback AFTER — verify controls were actually changed
             val readback = RootShell.execForOutput(buildString {
