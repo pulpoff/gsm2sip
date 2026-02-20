@@ -4,7 +4,7 @@ Android app that bridges GSM calls (local SIM) with the CallAgent SIP/Asterisk s
 
 | Dialer | SIP Registration |
 |--------|-----------------|
-| <img src="../gsm2sip1.jpg" width="300"> | <img src="../gsm2sip2.jpg" width="300"> |
+| <img src="gsm2sip1.jpg" width="300"> | <img src="gsm2sip2.jpg" width="300"> |
 
 ## How It Works
 
