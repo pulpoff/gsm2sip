@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">callagent</string>
+    <string name="activity_title">callagent</string>
+    <string name="channel_name">callagent Service</string>
+    <string name="channel_description">Keeps SIP registration active</string>
+    <string name="notification_title">callagent</string>
+    <string name="notification_text_registered">Registered — Ready</string>
+    <string name="notification_text_unregistered">Connecting…</string>
+    <string name="notification_text_call">Call active</string>
+</resources>

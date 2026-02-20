@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Privileged permissions for the SIP-GSM Gateway app.
+    Installed as system priv-app via Magisk module.
+-->
+<permissions>
+    <privapp-permissions package="com.callagent.gateway">
+        <!-- Audio: capture telephony audio streams (VOICE_CALL, VOICE_DOWNLINK) -->
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+
+        <!-- Telephony: read IMEI, precise call state, modify phone state -->
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+        <permission name="android.permission.READ_PRECISE_PHONE_STATE" />
+        <permission name="android.permission.MODIFY_PHONE_STATE" />
+        <permission name="android.permission.CALL_PRIVILEGED" />
+
+        <!-- System: logging, settings -->
+        <permission name="android.permission.READ_LOGS" />
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.INTERACT_ACROSS_USERS" />
+
+        <!-- Telecom: call provider registration -->
+        <permission name="android.permission.REGISTER_CALL_PROVIDER" />
+        <permission name="android.permission.REGISTER_SIM_SUBSCRIPTION" />
+        <permission name="android.permission.BIND_INCALL_SERVICE" />
+        <permission name="android.permission.BIND_TELECOM_CONNECTION_SERVICE" />
+    </privapp-permissions>
+</permissions>

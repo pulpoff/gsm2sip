@@ -1,0 +1,18 @@
+# Build outputs
+*.apk
+gateway-magisk.zip
+magisk/system/priv-app/Gateway/
+!magisk/system/priv-app/PermissionController/
+local.properties
+.env.build
+
+# Gradle
+.gradle/
+build/
+app/build/
+
+
+# IDE
+.idea/
+*.iml
+.vscode/

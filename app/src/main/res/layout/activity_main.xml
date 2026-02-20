@@ -1,0 +1,521 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <!-- ═══ Main tabbed layout ═══ -->
+    <LinearLayout
+        android:id="@+id/tabbedRoot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Tab content area (fills space above bottom bar) -->
+        <FrameLayout
+            android:id="@+id/tabContent"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- ── TAB 1: Dialer ── -->
+            <LinearLayout
+                android:id="@+id/tabDialer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:background="#111827">
+
+                <!-- Phone number display -->
+                <TextView
+                    android:id="@+id/tvDialNumber"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="32sp"
+                    android:textColor="#FFFFFF"
+                    android:gravity="center"
+                    android:paddingVertical="24dp"
+                    android:paddingHorizontal="16dp"
+                    android:hint="Enter number"
+                    android:textColorHint="#6B7280"
+                    android:maxLines="1"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="18sp"
+                    android:autoSizeMaxTextSize="32sp" />
+
+                <!-- Keypad grid (fills available space, full width) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:paddingHorizontal="8dp">
+
+                    <!-- Row 1: 1 2 3 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView android:id="@+id/btnDial1" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="1" />
+                        <TextView android:id="@+id/btnDial2" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="2" />
+                        <TextView android:id="@+id/btnDial3" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="3" />
+                    </LinearLayout>
+
+                    <!-- Row 2: 4 5 6 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView android:id="@+id/btnDial4" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="4" />
+                        <TextView android:id="@+id/btnDial5" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="5" />
+                        <TextView android:id="@+id/btnDial6" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="6" />
+                    </LinearLayout>
+
+                    <!-- Row 3: 7 8 9 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView android:id="@+id/btnDial7" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="7" />
+                        <TextView android:id="@+id/btnDial8" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="8" />
+                        <TextView android:id="@+id/btnDial9" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="9" />
+                    </LinearLayout>
+
+                    <!-- Row 4: * 0 # -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView android:id="@+id/btnDialStar" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="*" />
+                        <TextView android:id="@+id/btnDial0" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="0" />
+                        <TextView android:id="@+id/btnDialHash" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="#" />
+                    </LinearLayout>
+
+                    <!-- Row 5: + call backspace -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView android:id="@+id/btnDialPlus" style="@style/DialButton" android:layout_width="0dp" android:layout_weight="1" android:text="+" />
+
+                        <!-- Green call button -->
+                        <ImageView
+                            android:id="@+id/btnCall"
+                            android:layout_width="0dp"
+                            android:layout_height="64dp"
+                            android:layout_weight="1"
+                            android:layout_margin="4dp"
+                            android:background="@drawable/dial_call_bg"
+                            android:src="@drawable/ic_phone_call"
+                            android:scaleType="center"
+                            android:padding="16dp"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:contentDescription="Call" />
+
+                        <TextView
+                            android:id="@+id/btnBackspace"
+                            style="@style/DialButton"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:text="\u232B" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ── TAB 2: Calls ── -->
+            <LinearLayout
+                android:id="@+id/tabCalls"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:background="#111827"
+                android:visibility="gone">
+
+                <!-- Filter + clear toolbar: 3 icon buttons -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="8dp"
+                    android:paddingTop="10dp"
+                    android:paddingBottom="8dp">
+
+                    <ImageButton
+                        android:id="@+id/btnFilterIn"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:src="@drawable/ic_call_incoming"
+                        android:scaleType="centerInside"
+                        android:backgroundTint="@color/primary"
+                        android:layout_marginHorizontal="4dp"
+                        android:contentDescription="Incoming"
+                        style="?attr/borderlessButtonStyle" />
+
+                    <ImageButton
+                        android:id="@+id/btnFilterOut"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:src="@drawable/ic_call_outgoing"
+                        android:scaleType="centerInside"
+                        android:backgroundTint="#374151"
+                        android:layout_marginHorizontal="4dp"
+                        android:contentDescription="Outgoing"
+                        style="?attr/borderlessButtonStyle" />
+
+                    <ImageButton
+                        android:id="@+id/btnCallLogClear"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:src="@drawable/ic_trash"
+                        android:scaleType="centerInside"
+                        android:backgroundTint="#374151"
+                        android:layout_marginHorizontal="4dp"
+                        android:contentDescription="Clear call log"
+                        style="?attr/borderlessButtonStyle" />
+                </LinearLayout>
+
+                <!-- Call log entries (scrollable) -->
+                <ScrollView
+                    android:id="@+id/callLogScroll"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <LinearLayout
+                        android:id="@+id/callLogContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingHorizontal="8dp"
+                        android:paddingBottom="16dp" />
+                </ScrollView>
+
+                <!-- Empty state text (shown when no calls) -->
+                <TextView
+                    android:id="@+id/tvCallsEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="No calls yet"
+                    android:textSize="16sp"
+                    android:textColor="#6B7280"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- ── TAB 3: Settings (old main screen) ── -->
+            <LinearLayout
+                android:id="@+id/tabSettings"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:background="@color/background"
+                android:visibility="gone">
+
+                <!-- Header: Logo + Title + buttons -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingHorizontal="16dp"
+                    android:paddingVertical="12dp">
+
+                    <ImageView
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:src="@mipmap/ic_launcher"
+                        android:contentDescription="@string/app_name" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/activity_title"
+                        android:textSize="22sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:layout_marginStart="10dp" />
+
+                    <ImageButton
+                        android:id="@+id/btnInfo"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:src="@drawable/ic_info"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Device info"
+                        android:scaleType="centerInside" />
+
+                    <ImageButton
+                        android:id="@+id/btnConfig"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:src="@drawable/ic_gear"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Settings"
+                        android:scaleType="centerInside" />
+                </LinearLayout>
+
+                <!-- Status card -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/card_bg"
+                    android:padding="12dp"
+                    android:layout_marginHorizontal="16dp">
+
+                    <View
+                        android:id="@+id/statusDot"
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:background="@drawable/status_dot" />
+
+                    <TextView
+                        android:id="@+id/tvStatusText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="8dp"
+                        android:text="Stopped"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <TextView
+                        android:id="@+id/tvUptime"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="13sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary" />
+                </LinearLayout>
+
+                <!-- Start/Stop + Log buttons -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="16dp"
+                    android:paddingTop="10dp">
+
+                    <Button
+                        android:id="@+id/btnStart"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="START"
+                        android:backgroundTint="#16A34A"
+                        android:textColor="#FFFFFF"
+                        android:layout_marginEnd="3dp" />
+
+                    <Button
+                        android:id="@+id/btnCopyLog"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="LOG"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:textColor="#FFFFFF"
+                        android:layout_marginStart="3dp" />
+                </LinearLayout>
+
+                <!-- Log fills remaining space -->
+                <ScrollView
+                    android:id="@+id/svLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@color/surface"
+                    android:padding="8dp"
+                    android:layout_margin="16dp">
+
+                    <TextView
+                        android:id="@+id/tvLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_log"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:text="" />
+                </ScrollView>
+            </LinearLayout>
+
+        </FrameLayout>
+
+        <!-- ═══ Bottom tab bar ═══ -->
+        <LinearLayout
+            android:id="@+id/bottomTabBar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:background="@color/surface"
+            android:elevation="8dp"
+            android:gravity="center_vertical">
+
+            <!-- Dialer tab -->
+            <LinearLayout
+                android:id="@+id/tabBtnDialer"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:id="@+id/tabIconDialer"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_tab_dialer"
+                    android:tint="@color/primary" />
+                <TextView
+                    android:id="@+id/tabLabelDialer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Dialer"
+                    android:textSize="11sp"
+                    android:textColor="@color/primary" />
+            </LinearLayout>
+
+            <!-- Calls tab -->
+            <LinearLayout
+                android:id="@+id/tabBtnCalls"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:id="@+id/tabIconCalls"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_tab_calls"
+                    android:tint="@color/text_hint" />
+                <TextView
+                    android:id="@+id/tabLabelCalls"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Calls"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_hint" />
+            </LinearLayout>
+
+            <!-- Settings tab -->
+            <LinearLayout
+                android:id="@+id/tabBtnSettings"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:id="@+id/tabIconSettings"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_tab_settings"
+                    android:tint="@color/text_hint" />
+                <TextView
+                    android:id="@+id/tabLabelSettings"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Settings"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_hint" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ═══ Full-screen in-call overlay (above everything, hidden by default) ═══ -->
+    <LinearLayout
+        android:id="@+id/inCallView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/background"
+        android:visibility="gone"
+        android:gravity="center_horizontal">
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/tvInCallStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Calling..."
+            android:textSize="16sp"
+            android:textColor="@color/text_secondary" />
+
+        <TextView
+            android:id="@+id/tvInCallNumber"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="32sp"
+            android:textColor="@color/text_primary"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:paddingVertical="16dp"
+            android:paddingHorizontal="24dp"
+            android:maxLines="1"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="18sp"
+            android:autoSizeMaxTextSize="32sp" />
+
+        <TextView
+            android:id="@+id/tvInCallTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textSize="48sp"
+            android:textColor="@color/text_primary"
+            android:fontFamily="monospace"
+            android:paddingVertical="24dp"
+            android:visibility="gone" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <Button
+            android:id="@+id/btnInCallEnd"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginBottom="32dp"
+            android:text="END CALL"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#DC2626"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
+    </LinearLayout>
+
+</FrameLayout>

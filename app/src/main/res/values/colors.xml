@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+
+    <!-- Backgrounds -->
+    <color name="background">#F9FAFB</color>
+    <color name="surface">#FFFFFF</color>
+
+    <!-- Text -->
+    <color name="text_primary">#111827</color>
+    <color name="text_label">#374151</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_log">#4B5563</color>
+    <color name="text_hint">#9CA3AF</color>
+
+    <!-- Buttons -->
+    <color name="btn_secondary">#374151</color>
+
+    <!-- Borders -->
+    <color name="border_input">#D1D5DB</color>
+    <color name="border_card">#E5E7EB</color>
+
+    <!-- Status bar -->
+    <color name="status_bar">#FFFFFF</color>
+</resources>

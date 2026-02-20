@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Backgrounds -->
+    <color name="background">#111827</color>
+    <color name="surface">#1F2937</color>
+
+    <!-- Text -->
+    <color name="text_primary">#F9FAFB</color>
+    <color name="text_label">#D1D5DB</color>
+    <color name="text_secondary">#9CA3AF</color>
+    <color name="text_log">#9CA3AF</color>
+    <color name="text_hint">#6B7280</color>
+
+    <!-- Buttons -->
+    <color name="btn_secondary">#374151</color>
+
+    <!-- Borders -->
+    <color name="border_input">#4B5563</color>
+    <color name="border_card">#374151</color>
+
+    <!-- Status bar -->
+    <color name="status_bar">#111827</color>
+</resources>

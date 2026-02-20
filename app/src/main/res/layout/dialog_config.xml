@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <!-- SIP Server -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SIP Server"
+        android:textStyle="bold"
+        android:textColor="@color/text_label" />
+
+    <EditText
+        android:id="@+id/etSipServer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="sip.callagent.pro"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_hint"
+        android:background="@drawable/input_bg"
+        android:padding="10dp"
+        android:layout_marginTop="4dp"
+        android:inputType="text"
+        android:importantForAutofill="no" />
+
+    <!-- SIP Port -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SIP Port"
+        android:textStyle="bold"
+        android:textColor="@color/text_label"
+        android:layout_marginTop="12dp" />
+
+    <EditText
+        android:id="@+id/etSipPort"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="5060"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_hint"
+        android:background="@drawable/input_bg"
+        android:padding="10dp"
+        android:layout_marginTop="4dp"
+        android:inputType="number"
+        android:importantForAutofill="no" />
+
+    <!-- SIP Username -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SIP Username"
+        android:textStyle="bold"
+        android:textColor="@color/text_label"
+        android:layout_marginTop="12dp" />
+
+    <EditText
+        android:id="@+id/etSipUser"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="extension"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_hint"
+        android:background="@drawable/input_bg"
+        android:padding="10dp"
+        android:layout_marginTop="4dp"
+        android:inputType="text"
+        android:importantForAutofill="no" />
+
+    <!-- SIP Password -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SIP Password"
+        android:textStyle="bold"
+        android:textColor="@color/text_label"
+        android:layout_marginTop="12dp" />
+
+    <EditText
+        android:id="@+id/etSipPassword"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="password"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_hint"
+        android:background="@drawable/input_bg"
+        android:padding="10dp"
+        android:layout_marginTop="4dp"
+        android:inputType="textPassword"
+        android:importantForAutofill="no" />
+
+    <!-- Autoconnect -->
+    <CheckBox
+        android:id="@+id/cbAutoconnect"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Autoconnect on startup"
+        android:textColor="@color/text_label"
+        android:layout_marginTop="16dp"
+        android:checked="true" />
+
+</LinearLayout>

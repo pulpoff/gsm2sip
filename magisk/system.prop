@@ -1,0 +1,17 @@
+# ── Qualcomm-specific (MSM8930, SDM845, etc.) ──
+# Allow concurrent VoIP audio during GSM voice calls.
+# Ignored on non-Qualcomm (e.g., Exynos) devices.
+voice.record.conc.disabled=false
+voice.voip.conc.disabled=false
+voice.playback.conc.disabled=false
+
+# Disable Qualcomm Fluence noise/echo processing.
+ro.qc.sdk.audio.fluencetype=none
+persist.audio.fluence.voicerec=false
+persist.audio.fluence.speaker=false
+persist.audio.fluence.voicecall=false
+
+# ── Samsung Exynos (S10e, etc.) ──
+# Allow concurrent audio capture during voice calls.
+# Samsung HAL may use these to gate VOICE_CALL capture.
+persist.audio.call_record.enabled=true
