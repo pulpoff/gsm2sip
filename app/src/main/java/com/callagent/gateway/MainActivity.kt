@@ -448,12 +448,14 @@ class MainActivity : AppCompatActivity() {
         val etPort = view.findViewById<EditText>(R.id.etSipPort)
         val etUser = view.findViewById<EditText>(R.id.etSipUser)
         val etPassword = view.findViewById<EditText>(R.id.etSipPassword)
+        val etOwnNumber = view.findViewById<EditText>(R.id.etOwnNumber)
         val cbAutoconnect = view.findViewById<CheckBox>(R.id.cbAutoconnect)
 
-        etServer.setText(prefs.getString("server", "sip.callagent.pro"))
+        etServer.setText(prefs.getString("server", "callagent.pro"))
         etPort.setText(prefs.getInt("port", 5060).toString())
         etUser.setText(prefs.getString("user", ""))
         etPassword.setText(prefs.getString("pass", ""))
+        etOwnNumber.setText(prefs.getString("own_number", "+49123123123123"))
         cbAutoconnect.isChecked = prefs.getBoolean("autoconnect", true)
 
         AlertDialog.Builder(this)
@@ -464,14 +466,19 @@ class MainActivity : AppCompatActivity() {
                 val port = etPort.text.toString().trim().toIntOrNull() ?: 5060
                 val user = etUser.text.toString().trim()
                 val pass = etPassword.text.toString().trim()
+                val ownNumber = etOwnNumber.text.toString().trim()
                 prefs.edit()
                     .putString("server", server)
                     .putInt("port", port)
                     .putString("user", user)
                     .putString("pass", pass)
+                    .putString("own_number", ownNumber)
                     .putBoolean("autoconnect", cbAutoconnect.isChecked)
                     .apply()
-                appendLog("Config saved: $user@$server:$port (autoconnect=${cbAutoconnect.isChecked})")
+                appendLog(
+                    "Config saved: $user@$server:$port " +
+                        "(own=${ownNumber.ifEmpty { "auto" }}, autoconnect=${cbAutoconnect.isChecked})"
+                )
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1168,6 +1175,17 @@ class MainActivity : AppCompatActivity() {
         val number = tvDialNumber.text.toString().trim()
         if (number.isEmpty()) {
             Toast.makeText(this, "Enter a number to call", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (com.callagent.gateway.gsm.GsmCallManager.isMmiCode(number)) {
+            appendLog("Sending MMI $number")
+            com.callagent.gateway.gsm.GsmCallManager.sendMmi(this, number) { result ->
+                runOnUiThread {
+                    appendLog("MMI result: $result")
+                    Toast.makeText(this, result, Toast.LENGTH_LONG).show()
+                }
+            }
             return
         }
 

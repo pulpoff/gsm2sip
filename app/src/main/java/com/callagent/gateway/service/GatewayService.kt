@@ -202,7 +202,14 @@ class GatewayService : Service() {
         // This prevents redundant ACTION_START intents (e.g. from the
         // Activity opening, START_STICKY restart, or BootReceiver) from
         // killing an active SIP registration or call bridge.
-        if (!stopped && sipClient != null) {
+        //
+        // `initializing` covers the window before sipClient is assigned:
+        // initSipClient() runs on the gateway-init thread, so two intents
+        // arriving back to back (START_STICKY redelivery with a null intent
+        // + the Activity's autoStartGateway) would both see a null sipClient
+        // and each bring up their own client — two sockets on :5060 and two
+        // REGISTERs.
+        if (!stopped && (sipClient != null || initializing.get())) {
             Log.i(TAG, "startGateway: already running, skipping restart")
             // Broadcast current state so the Activity picks up the live status
             val state = orchestrator?.bridgeState ?: CallOrchestrator.BridgeState.IDLE
@@ -233,7 +240,7 @@ class GatewayService : Service() {
         currentCallStart = 0L
 
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "sip.callagent.pro") ?: ""
+        val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "callagent.pro") ?: ""
         val port = intent?.getIntExtra(EXTRA_PORT, 5060) ?: prefs.getInt("port", 5060)
         val username = intent?.getStringExtra(EXTRA_USER) ?: prefs.getString("user", "") ?: ""
         val password = intent?.getStringExtra(EXTRA_PASS) ?: prefs.getString("pass", "") ?: ""
