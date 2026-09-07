@@ -74,7 +74,18 @@ class RtpSession(
     // bridge that already has 100-200ms of inherent GSM latency.
     // Previous capacity=3 was too aggressive: any slight jitter caused
     // packet drops and choppy audio.
-    private val jitterBuffer = ArrayBlockingQueue<ByteArray>(8)
+    /** Jitter buffer depth, in 20ms frames.  This is the cap on how much
+     *  delay can accumulate between the network and the caller's ear — the
+     *  queue used to hold 8 and was drained down to 5, so 100ms was permanently
+     *  sitting in it on top of the audio buffers.
+     *
+     *  The capacity alone bounds the latency; there is deliberately no drain
+     *  loop.  Discarding frames merely because the queue is above some target
+     *  throws away audio the caller would otherwise have heard, and a burst
+     *  that would have been consumed a few milliseconds later gets destroyed
+     *  instead.  Frames are only dropped when the queue is genuinely full,
+     *  which is the point at which the consumer really cannot keep up. */
+    private val jitterBuffer = ArrayBlockingQueue<ByteArray>(4)
 
     // RTP inactivity tracking
     @Volatile private var lastRtpReceivedTime = 0L
@@ -1134,9 +1145,6 @@ class RtpSession(
                 // Keep at most 5 (100ms) — enough headroom to absorb
                 // jitter without audible gaps.  100ms is still well within
                 // the GSM bridge's inherent latency budget.
-                while (jitterBuffer.size > 5) {
-                    jitterBuffer.poll()
-                }
 
                 val encoded = jitterBuffer.poll(18, TimeUnit.MILLISECONDS)
                 if (encoded == null) {

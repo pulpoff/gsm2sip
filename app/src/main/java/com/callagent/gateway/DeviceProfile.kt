@@ -787,15 +787,14 @@ data class DeviceProfile(
             // session runs, and downlink-only is what we want: VOICE_CALL also
             // captures the uplink, which carries the agent's injected audio.
             voiceDownlinkWorks = true,
-            // The agent's audio does come back to us, just not through the
-            // air.  It is injected into the modem uplink, played out at the
-            // far end, picked up by the far end's own microphone, and returned
-            // on our downlink — which is exactly what VOICE_DOWNLINK captures.
-            // The modem's echo canceller cannot remove it, because
-            // incall_music injects past the point where the AEC takes its
-            // reference, so it has no idea that audio was ever sent.  The
-            // double-talk gate is the only thing that can suppress it.
-            playbackLeaksIntoCapture = true,
+            // The echo this gate existed for was VOC_REC_UL folding our own
+            // uplink into the capture, and that is fixed at the routing level
+            // now.  Left on, it only destroys real audio: measured echo=601 and
+            // noise=585 gated against fwd=166 forwarded, i.e. it was dropping
+            // most of the caller, and its echoGainRatio estimate sits at 0.00
+            // because it can only learn from frames it has already classified
+            // as echo — a deadlock it cannot leave on its own.
+            playbackLeaksIntoCapture = false,
             preferUnprocessedMic = true,
             // Measured: TYPE_TELEPHONY is offered as an input and
             // setPreferredDevice is accepted (routedFrom=18), but every source
@@ -808,10 +807,12 @@ data class DeviceProfile(
             incallMusicBeforeTrack = true,
             // The incall_music_uplink mixPort accepts stereo only.
             playbackStereo = true,
-            // Force deep-buffer playback (MultiMedia1) instead of the fast
-            // path (MultiMedia5), so the Incall_Music mixer actually has the
-            // track to inject.
-            playbackBufferMs = 100,
+            // No override: routing is decided by setPreferredDevice(TELEPHONY)
+            // rather than by buffer size now, so the deep-buffer trick that
+            // forced the track off MultiMedia5 is no longer load-bearing, and
+            // 100ms of playback buffer is 100ms of latency on a live call.
+            // AudioTrack's own minimum for 16 kHz stereo is already ~80ms.
+            playbackBufferMs = 0,
             routeChangeDelayMs = 500,
             appopsPropagationMs = 300,
         )

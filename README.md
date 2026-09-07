@@ -24,14 +24,24 @@ nothing else.
 
 ## Supported Devices
 
-| Device | SoC | Agent → caller | Caller → agent |
-|---|---|---|---|
-| Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | **digital**, via `VOICE_DOWNLINK` |
-| Samsung Galaxy S4 Mini | Qualcomm MSM8930, WCD9304 | digital, via `incall_music` | acoustic (mic hears the speaker) |
-| Samsung Galaxy S10e | Exynos 9820, CS47L93 | not working | not working |
+| Device | SoC | Agent → caller | Caller → agent | Status |
+|---|---|---|---|---|
+| Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **fully working** |
+| Samsung Galaxy S4 Mini | Qualcomm MSM8930, WCD9304 | digital, via `incall_music` | acoustic (mic hears the speaker) | partial |
+| Samsung Galaxy S10e | Exynos 9820, CS47L93 | no path | no path | not usable |
 
-The Poco X3 is the reference device: it is the only one where the phone's own
-microphone and speaker are muted and both directions run through the modem.
+**The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
+both directions, entirely through the modem, with the handset's own microphone
+and speaker muted for the whole call.
+
+Other Qualcomm phones are likely to work with little or no change, since
+everything the SM6150 profile depends on is generic Qualcomm audio: the
+`incall_music` mixer, the `VOC_REC_*` in-call capture routing, and the
+`voice_extn` `vsid`/`call_state` interface.  What varies between devices is
+which front-end the playback track lands on and which mixer names exist, and
+those live in `DeviceProfile`.  An unknown Qualcomm device falls back to
+`genericQualcomm()`; `adb shell su -c tinymix` plus the mixer readback logged
+around each call is enough to write a new profile.
 
 Getting digital capture on a Qualcomm device depends on one thing that is easy
 to miss.  The HAL gates in-call recording — and the per-session voice mutes —
