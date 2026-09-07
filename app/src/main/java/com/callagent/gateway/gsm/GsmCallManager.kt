@@ -306,6 +306,19 @@ object GsmCallManager {
                     service.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
                 }
 
+                if (profile.silenceLocalAudio) {
+                    // Mute through Telecom as well as AudioManager.  Telecom
+                    // owns the call's mute state and re-applies it whenever the
+                    // audio route changes, so an AudioManager-only mute can be
+                    // quietly undone underneath us.
+                    try {
+                        service.setMuted(true)
+                        appLog("Telecom mute requested")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Telecom setMuted failed: ${e.message}")
+                    }
+                }
+
                 audioManager?.let { am ->
                     // Do NOT set isMicrophoneMute = true here!
                     // v2.8.50: Samsung Exynos HAL interprets mic mute as "mute
@@ -313,7 +326,11 @@ object GsmCallManager {
                     // AudioTrack audio from reaching the caller.
                     // MSM8930: mic muting is handled at ALSA level (DEC MUX=ZERO,
                     // MICBIAS=0) in mixerSetupCmd — no need for API-level mute.
-                    am.isMicrophoneMute = false
+                    // Profiles that silence the handset re-mute in
+                    // enforceVolumes() immediately below.
+                    if (!profile.silenceLocalAudio) {
+                        am.isMicrophoneMute = false
+                    }
                     enforceVolumes(am)
 
                     // Delay mixer/volume setup until speaker route change settles.

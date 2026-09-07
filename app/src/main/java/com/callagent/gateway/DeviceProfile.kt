@@ -649,16 +649,21 @@ data class DeviceProfile(
                 // agent its own echo and read rawCapRMS≈5.  Downlink is the
                 // caller's voice, which is what the agent needs to hear.
                 append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
-                // In-call capture: both legs of the voice call into the
-                // MultiMedia capture ports AudioRecord may land on.
+                // In-call capture: DOWNLINK ONLY.
+                // The uplink leg must stay off.  It carries what we inject via
+                // incall_music, so routing it into the capture front-end feeds
+                // the agent its own voice — an echo entirely inside this phone,
+                // which is why it persisted even with the far end's microphone
+                // muted.  VOC_REC_UL was enabled here while the uplink was
+                // still silent and the mistake was invisible.
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
-                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 1 2>/dev/null; ")
-                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
-                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia9 Mixer VOC_REC_DL' 1 2>/dev/null; ")
-                append("tinymix 'MultiMedia9 Mixer VOC_REC_UL' 1 2>/dev/null")
+                append("tinymix 'MultiMedia9 Mixer VOC_REC_UL' 0 2>/dev/null")
             },
             mixerRestoreCmd = buildString {
                 append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
@@ -739,7 +744,12 @@ data class DeviceProfile(
                 // SND_DEVICE_IN_INCALL_REC_* and programs these itself, and
                 // overwriting them underneath it is more likely to break the
                 // record session than to help.  Report what the HAL chose.
+                // Kill the uplink leg again once the stream exists — opening
+                // the capture front-end reprograms its mixers.
+                append("tinymix 'MultiMedia9 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("echo -n 'MM9_DL='; tinymix 'MultiMedia9 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'MM9_UL='; tinymix 'MultiMedia9 Mixer VOC_REC_UL' 2>&1; ")
                 append("echo -n 'VocRecCfg='; tinymix 'Voc Rec Config' 2>&1")
             },
             mixerVerifyCmd = buildString {
@@ -777,9 +787,15 @@ data class DeviceProfile(
             // session runs, and downlink-only is what we want: VOICE_CALL also
             // captures the uplink, which carries the agent's injected audio.
             voiceDownlinkWorks = true,
-            // Playback goes to Telephony Tx, never to the speaker, so the mic
-            // cannot hear it and the echo gate has nothing to gate.
-            playbackLeaksIntoCapture = false,
+            // The agent's audio does come back to us, just not through the
+            // air.  It is injected into the modem uplink, played out at the
+            // far end, picked up by the far end's own microphone, and returned
+            // on our downlink — which is exactly what VOICE_DOWNLINK captures.
+            // The modem's echo canceller cannot remove it, because
+            // incall_music injects past the point where the AEC takes its
+            // reference, so it has no idea that audio was ever sent.  The
+            // double-talk gate is the only thing that can suppress it.
+            playbackLeaksIntoCapture = true,
             preferUnprocessedMic = true,
             // Measured: TYPE_TELEPHONY is offered as an input and
             // setPreferredDevice is accepted (routedFrom=18), but every source
