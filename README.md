@@ -34,14 +34,43 @@ nothing else.
 both directions, entirely through the modem, with the handset's own microphone
 and speaker muted for the whole call.
 
-Other Qualcomm phones are likely to work with little or no change, since
-everything the SM6150 profile depends on is generic Qualcomm audio: the
-`incall_music` mixer, the `VOC_REC_*` in-call capture routing, and the
-`voice_extn` `vsid`/`call_state` interface.  What varies between devices is
-which front-end the playback track lands on and which mixer names exist, and
-those live in `DeviceProfile`.  An unknown Qualcomm device falls back to
-`genericQualcomm()`; `adb shell su -c tinymix` plus the mixer readback logged
-around each call is enough to write a new profile.
+### Choosing a device
+
+Support is a property of the **vendor image, not the chip**.  Everything the
+SM6150 profile relies on — the `incall_music` mixer, the `VOC_REC_*` capture
+routing, the `voice_extn` `vsid`/`call_state` interface — is generic Qualcomm
+audio, present across the msm8974→sm8xxx HAL family.  What varies is whether
+the OEM built the feature in, whether their audio policy exposes a route to the
+modem uplink, and which front-end the playback track lands on.  The same SoC
+with two different vendor builds can differ, so listing "supported chips" would
+be misleading.
+
+Check a candidate instead:
+
+```bash
+tools/check-device.sh [adb-serial]
+```
+
+The audio-policy check needs no root, so a phone can be vetted before rooting
+it.  The HAL and mixer checks need Magisk with Superuser access set to
+"Apps and ADB".
+
+What has actually been checked so far:
+
+| Device | SoC | Vendor | Result |
+|---|---|---|---|
+| Poco X3 NFC | SM6150/SM7150 | Xiaomi (MIUI) | fully working, verified on live calls |
+| Galaxy Tab S5e | SDM710 | Samsung | `incall_music_uplink` → `Telephony Tx` present; no telephony hardware, so not usable as a gateway |
+| Galaxy S4 Mini | MSM8930 | — | `incall_music` present; digital capture untested |
+| Galaxy S10e | Exynos 9820 | — | no path in either direction |
+
+Two different SoCs from two different OEMs both declare
+`incall_music_uplink` routed to `Telephony Tx`, with the same
+`AUDIO_CHANNEL_OUT_STEREO` constraint, which suggests most Qualcomm phones are
+candidates.  A new device still needs a `DeviceProfile` entry: the mixer names
+are generic but the front-end the track lands on is not, and the
+`Mixer BEFORE/AFTER` lines logged around each call show which one it is.
+An unrecognised Qualcomm device falls back to `genericQualcomm()`.
 
 Getting digital capture on a Qualcomm device depends on one thing that is easy
 to miss.  The HAL gates in-call recording — and the per-session voice mutes —
