@@ -199,6 +199,15 @@ class SipMessage private constructor(
 
 /** Builder for constructing SIP messages */
 object SipBuilder {
+    /**
+     * How this gateway identifies itself in SIP traffic, the way a Fritz!Box
+     * announces itself as "AVM FRITZ!Box 7530 AX".  Without it the device is
+     * anonymous in the server's logs and CDRs.  SipClient sets it once at
+     * startup so the configured server domain can be included.
+     */
+    @Volatile
+    var userAgent: String = "gsm2sip"
+
     private fun branch(): String = "z9hG4bK${(100000000..999999999).random()}"
     private fun tag(): String = "gw${(100000000..999999999).random()}"
 
@@ -213,6 +222,7 @@ object SipBuilder {
             append("REGISTER $uri SIP/2.0\r\n")
             append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
+            append("User-Agent: $userAgent\r\n")
             append("To: <sip:$username@$domain>\r\n")
             append("From: <sip:$username@$localIp>;tag=${tag()}\r\n")
             append("Call-ID: $callId\r\n")
@@ -241,6 +251,7 @@ object SipBuilder {
             append("INVITE $targetUri SIP/2.0\r\n")
             append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
+            append("User-Agent: $userAgent\r\n")
             append("To: <$targetUri>\r\n")
             append("From: $fromDisplay<sip:$fromUser@$domain>;tag=$fromTag\r\n")
             append("Call-ID: $callId\r\n")
@@ -287,6 +298,7 @@ object SipBuilder {
         append("From: ${msg.from}\r\n")
         append("Call-ID: ${msg.callId}\r\n")
         append("CSeq: ${msg.cseq}\r\n")
+        append("Server: $userAgent\r\n")
         append("Content-Length: 0\r\n\r\n")
     }
 
@@ -300,6 +312,7 @@ object SipBuilder {
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
+            append("Server: $userAgent\r\n")
             append("Content-Length: 0\r\n\r\n")
         }
     }
@@ -313,6 +326,7 @@ object SipBuilder {
         append("ACK $targetUri SIP/2.0\r\n")
         append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
+            append("User-Agent: $userAgent\r\n")
         append("To: $toHeader\r\n")
         append("From: $fromHeader\r\n")
         append("Call-ID: $callId\r\n")
@@ -330,6 +344,7 @@ object SipBuilder {
         append("BYE $targetUri SIP/2.0\r\n")
         append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
+            append("User-Agent: $userAgent\r\n")
         append("From: $fromHeader\r\n")
         append("To: $toHeader\r\n")
         append("Call-ID: $callId\r\n")
@@ -347,6 +362,7 @@ object SipBuilder {
         append("CANCEL $targetUri SIP/2.0\r\n")
         append("Via: $viaHeader\r\n")
         append("Max-Forwards: 70\r\n")
+            append("User-Agent: $userAgent\r\n")
         append("From: $fromHeader\r\n")
         append("To: $toHeader\r\n")
         append("Call-ID: $callId\r\n")

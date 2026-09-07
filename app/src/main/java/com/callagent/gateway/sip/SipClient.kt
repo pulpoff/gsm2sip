@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 
 /**
  * SIP client: handles UDP transport, registration, and call routing.
@@ -42,6 +43,13 @@ class SipClient(
     @Volatile private var lastServerResponseTime = 0L
     @Volatile private var registrationLatch: CountDownLatch? = null
 
+    /** Guards against two threads registering at once: start() launches a
+     *  SIP-Register thread while SIP-Monitor retries on its own schedule. */
+    private val registering = AtomicBoolean(false)
+
+    /** Consecutive real (not backed-off) registration failures. */
+    @Volatile private var registerFailures = 0
+
     private val activeCalls = ConcurrentHashMap<String, SipCall>()
     /** Single-thread executor for all socket sends — avoids NetworkOnMainThreadException */
     private var sendExecutor: ExecutorService? = null
@@ -69,6 +77,8 @@ class SipClient(
     fun start() {
         if (running.get()) return
         running.set(true)
+        SipBuilder.userAgent =
+            "gsm2sip v${com.callagent.gateway.BuildConfig.VERSION_NAME} $serverDomain"
         callIdBase = "${System.currentTimeMillis() / 1000}@$publicIp"
         createSocket()
 
@@ -253,27 +263,48 @@ class SipClient(
     // ── Registration ────────────────────────────────────
 
     /**
-     * Send REGISTER and wait for receiveLoop() to handle the response.
+     * Send ONE REGISTER and wait for receiveLoop() to handle the response.
      * Uses a CountDownLatch so only receiveLoop() reads from the socket
      * (eliminates the old race condition with waitForRegistration).
+     *
+     * Rate-limited by [RegisterBackoff]: while a previous failure's cooldown
+     * is still running this returns false without putting a packet on the
+     * wire.  Returns false immediately if another thread is already
+     * registering, so the startup and monitor threads cannot overlap.
      */
     private fun register(): Boolean {
-        for (attempt in 1..3) {
-            if (!running.get()) return false
-            uiLog("REGISTER attempt $attempt/3")
+        if (!running.get()) return false
+        if (!registering.compareAndSet(false, true)) {
+            Log.d(TAG, "REGISTER already in flight — skipping duplicate")
+            return false
+        }
+        try {
+            val hold = RegisterBackoff.holdOffMs(serverDomain)
+            if (hold > 0) {
+                Log.d(TAG, "REGISTER held off for ${hold / 1000}s more (backoff)")
+                return false
+            }
+            uiLog("REGISTER → $serverDomain")
             registrationLatch = CountDownLatch(1)
             sendRegister()
-            // Wait up to 10s for receiveLoop → handleRegisterResponse to signal
+            // Wait for receiveLoop → handleRegisterResponse to signal
             try {
-                registrationLatch?.await(10, TimeUnit.SECONDS)
-            } catch (_: InterruptedException) { /* stop requested */ }
-            if (registered) return true
+                registrationLatch?.await(REGISTER_TIMEOUT_SEC, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) { return false }
+            if (registered) {
+                RegisterBackoff.onSuccess()
+                registerFailures = 0
+                return true
+            }
             if (!running.get()) return false
-            Thread.sleep(2000)
+            val next = RegisterBackoff.onFailure()
+            registerFailures++
+            uiLog("REGISTER failed — next attempt in ${next / 1000}s")
+            listener?.onRegistrationFailed()
+            return false
+        } finally {
+            registering.set(false)
         }
-        uiLog("Registration failed after 3 attempts")
-        listener?.onRegistrationFailed()
-        return false
     }
 
     private fun sendRegister(auth: String? = null) {
@@ -384,7 +415,9 @@ class SipClient(
 
         activeCalls[callId] = call
         sendTo(invite, serverAddress)
-        Log.i(TAG, "Sent INVITE to $targetExtension (call-id=$callId)")
+        // Log both halves the server routes on: the Request-URI it turns into
+        // EXTEN, and the From user it turns into caller ID.
+        Log.i(TAG, "Sent INVITE RURI=$targetUri From=<sip:$fromUser@$serverDomain> (call-id=$callId)")
 
         // RFC 3261 Timer A: retransmit INVITE over UDP until any response is received.
         // Intervals: 500ms, 1s, 2s, 4s (capped at T2=4s). Stops immediately when
@@ -443,25 +476,22 @@ class SipClient(
 
     private fun monitorLoop() {
         Thread.sleep(15_000)
-        var reregBackoff = 10_000L // start at 10s, backoff on repeated failures
         while (running.get()) {
             try {
                 if (!registered) {
-                    uiLog("Not registered, attempting re-registration (backoff ${reregBackoff / 1000}s)")
-                    val ok = register()
-                    if (ok) {
-                        reregBackoff = 10_000L
+                    // register() rate-limits itself — while the cooldown is
+                    // running it returns without sending anything, so polling
+                    // once per loop costs no traffic.
+                    if (register()) {
                         keepaliveFailures = 0
-                    } else {
-                        // Exponential backoff: 10s, 20s, 40s, cap at 60s
-                        Thread.sleep(reregBackoff)
-                        reregBackoff = (reregBackoff * 2).coerceAtMost(60_000L)
-                        // After repeated failures, signal that we need a full reconnect
-                        if (reregBackoff >= 60_000L) {
-                            uiLog("Registration failed repeatedly, requesting reconnect")
-                            onConnectionLost?.invoke()
-                        }
-                        continue
+                    } else if (registerFailures >= MAX_REGISTER_FAILURES) {
+                        // Rebuild the socket in case the local IP changed.
+                        // Safe to repeat: the backoff schedule lives in the
+                        // companion, so the replacement SipClient inherits the
+                        // cooldown instead of restarting the retry cycle.
+                        uiLog("Registration failing repeatedly, requesting reconnect")
+                        registerFailures = 0
+                        onConnectionLost?.invoke()
                     }
                 } else {
                     // Send OPTIONS keepalive regardless of active calls
@@ -501,6 +531,7 @@ class SipClient(
             append("OPTIONS sip:$serverDomain:$serverPort SIP/2.0\r\n")
             append("Via: SIP/2.0/UDP $publicIp:$localPort;branch=$branch;rport\r\n")
             append("Max-Forwards: 70\r\n")
+            append("User-Agent: ${SipBuilder.userAgent}\r\n")
             append("To: <sip:$username@$serverDomain>\r\n")
             append("From: <sip:$username@$publicIp>;tag=49583\r\n")
             append("Call-ID: $callIdBase\r\n")
@@ -513,5 +544,58 @@ class SipClient(
 
     companion object {
         private const val TAG = "SipClient"
+
+        /** Seconds to wait for a REGISTER response before calling it failed. */
+        private const val REGISTER_TIMEOUT_SEC = 10L
+
+        /** Consecutive failures before asking GatewayService for a new socket. */
+        private const val MAX_REGISTER_FAILURES = 3
+
+        /**
+         * Exponential backoff for REGISTER, shared by every SipClient.
+         *
+         * It lives in the companion rather than on the instance because a run
+         * of failures ends in onConnectionLost() → GatewayService.reconnect(),
+         * which discards the SipClient and builds a new one.  With per-instance
+         * state the replacement restarted at the shortest delay, so an
+         * unreachable server produced a steady REGISTER flood — three packets
+         * per attempt, a fresh attempt every ~10s, a full reconnect every ~2
+         * minutes — until the server's fail2ban banned the gateway's IP.
+         * Keeping the schedule here means a new client picks the cooldown up
+         * where the old one left off.
+         */
+        private object RegisterBackoff {
+            private const val MIN_MS = 15_000L
+            private const val MAX_MS = 30 * 60 * 1000L
+
+            private var target = ""
+            private var delayMs = MIN_MS
+            private var nextAttemptAt = 0L
+
+            /** Millis still to wait before a REGISTER may be sent (0 = now). */
+            @Synchronized fun holdOffMs(server: String): Long {
+                if (server != target) {
+                    // Different server (or first use) — start clean.
+                    target = server
+                    delayMs = MIN_MS
+                    nextAttemptAt = 0L
+                }
+                return (nextAttemptAt - System.currentTimeMillis()).coerceAtLeast(0L)
+            }
+
+            @Synchronized fun onSuccess() {
+                delayMs = MIN_MS
+                nextAttemptAt = 0L
+            }
+
+            /** Doubles the delay (capped) and returns the wait just applied.
+             *  Jittered so several gateways on one server don't retry in step. */
+            @Synchronized fun onFailure(): Long {
+                val wait = (delayMs * (0.8 + Random.nextDouble() * 0.4)).toLong()
+                nextAttemptAt = System.currentTimeMillis() + wait
+                delayMs = (delayMs * 2).coerceAtMost(MAX_MS)
+                return wait
+            }
+        }
     }
 }
