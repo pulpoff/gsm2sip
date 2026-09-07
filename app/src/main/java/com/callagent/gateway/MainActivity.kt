@@ -20,6 +20,8 @@ import android.media.audiofx.NoiseSuppressor
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.app.role.RoleManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -117,9 +119,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var homeTrafficList: LinearLayout
     private lateinit var tvHomeTrafficEmpty: TextView
     private lateinit var btnFilterAll: Button
-    private lateinit var btnFilterRecent: Button
-    private lateinit var btnFilterMissed: Button
-    /** "all" | "recent" | "missed" — which calls the home list shows. */
+    private lateinit var btnFilterIncoming: Button
+    private lateinit var btnFilterOutgoing: Button
+    /** "all" | "in" | "out" — which calls the home list shows.  A missed call
+     *  is an inbound one that never carried audio, so it belongs under
+     *  Incoming rather than in a category of its own. */
     private var callFilter = "all"
     private var agentMuted = false
 
@@ -251,15 +255,9 @@ class MainActivity : AppCompatActivity() {
                         updateCallButton()
                     }
 
-                    // Show in-call screen for incoming calls on Dialer or Calls tab
-                    // On Settings tab the gateway still auto-answers — status + log is enough
-                    if (!inCallOpen && state == "GSM_RINGING") {
-                        val callerNum = info.removePrefix("GSM call from ")
-                        if (currentTab == "dialer" || currentTab == "calls") {
-                            openInCallScreen(callerNum)
-                            tvInCallStatus.text = "Incoming call"
-                        }
-                    }
+                    // No pop-up on an incoming call: the home view's live call
+                    // card is the in-call UI now, and the old full-screen view
+                    // appearing over it was just confusing.
 
                     if (inCallOpen) {
                         when (state) {
@@ -316,11 +314,13 @@ class MainActivity : AppCompatActivity() {
         homeTrafficList = findViewById(R.id.homeTrafficList)
         tvHomeTrafficEmpty = findViewById(R.id.tvHomeTrafficEmpty)
         btnFilterAll = findViewById(R.id.btnFilterAll)
-        btnFilterRecent = findViewById(R.id.btnFilterRecent)
-        btnFilterMissed = findViewById(R.id.btnFilterMissed)
+        btnFilterIncoming = findViewById(R.id.btnFilterIncoming)
+        btnFilterOutgoing = findViewById(R.id.btnFilterOutgoing)
         btnFilterAll.setOnClickListener { setCallFilter("all") }
-        btnFilterRecent.setOnClickListener { setCallFilter("recent") }
-        btnFilterMissed.setOnClickListener { setCallFilter("missed") }
+        btnFilterIncoming.setOnClickListener { setCallFilter("in") }
+        btnFilterOutgoing.setOnClickListener { setCallFilter("out") }
+        tvNetMobile.setOnClickListener { showLinkDetails(mobile = true) }
+        tvNetWifi.setOnClickListener { showLinkDetails(mobile = false) }
         findViewById<View>(R.id.btnHomeMenu).setOnClickListener { openConfigView() }
         // Tapping the status pill retries the connection, the way the old
         // settings screen's reconnect button did.
@@ -611,25 +611,277 @@ class MainActivity : AppCompatActivity() {
 
         tvNetWifi.text = try {
             val wm = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+            val cm = getSystemService(ConnectivityManager::class.java)
+            val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            val onWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             @Suppress("DEPRECATION")
             val info = wm.connectionInfo
-            if (info == null || info.networkId == -1) {
-                "WiFi off"
-            } else {
-                @Suppress("DEPRECATION")
-                val raw = info.ssid?.trim('"').orEmpty()
-                // Redacted unless location is granted; the rest of the link
-                // info is available regardless and is what actually matters
-                // for call quality.
-                val ssid = if (raw.isEmpty() || raw.contains("unknown", true)) "WiFi" else raw
-                @Suppress("DEPRECATION")
-                val band = if (info.frequency > 4000) "5G" else "2.4G"
-                @Suppress("DEPRECATION")
-                "$ssid $band ${info.linkSpeed}Mbps ${info.rssi}dBm"
+            when {
+                !wm.isWifiEnabled -> "WiFi off"
+                // networkId is NOT a connectivity test: without location
+                // permission getConnectionInfo() comes back redacted with
+                // networkId = -1 even on a healthy connection, which is what
+                // made this read "WiFi off" while WiFi was up.  Connectivity
+                // comes from NetworkCapabilities; link metrics are not
+                // location-gated and are still readable here.
+                !onWifi -> "WiFi not connected"
+                else -> {
+                    @Suppress("DEPRECATION")
+                    val raw = info?.ssid?.trim('"').orEmpty()
+                    val ssid =
+                        if (raw.isEmpty() || raw.contains("unknown", true)) "WiFi" else raw
+                    @Suppress("DEPRECATION")
+                    val freq = info?.frequency ?: 0
+                    @Suppress("DEPRECATION")
+                    val speed = info?.linkSpeed ?: -1
+                    @Suppress("DEPRECATION")
+                    val rssi = info?.rssi ?: 0
+                    val band = if (freq > 4000) "5G" else "2.4G"
+                    if (speed > 0) "$ssid $band ${speed}Mbps ${rssi}dBm"
+                    else "$ssid $band ${rssi}dBm"
+                }
             }
         } catch (e: Exception) {
             "wifi: n/a"
         }
+    }
+
+    /**
+     * Everything we can learn about one of the two links.
+     *
+     * What the framework can answer is shown immediately; the parts that need
+     * a shell — MAC addresses, cell identity — and the pings are appended as
+     * they arrive, so the dialog is never blank while a ping runs.
+     *
+     * SSID, BSSID and cell identity are gated behind location permission for
+     * an ordinary app.  This one has root instead, so it reads them from the
+     * system rather than holding a permission a gateway has no business with.
+     */
+    private fun showLinkDetails(mobile: Boolean) {
+        val body = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 12f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            setPadding(48, 24, 48, 24)
+            text = if (mobile) mobileDetailsFast() else wifiDetailsFast()
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (mobile) "Mobile network" else "WiFi")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Close", null)
+            .show()
+
+        fun append(line: String) = runOnUiThread {
+            if (dialog.isShowing) body.append(line)
+        }
+
+        Thread({
+            if (mobile) {
+                // Cell identity is location data as far as Android is
+                // concerned: dumpsys blanks it even for root, so the only way
+                // to read it is getAllCellInfo() with ACCESS_FINE_LOCATION.
+                // The Magisk module grants that on boot, so no prompt appears.
+                append("\n— cells —\n" + describeCells())
+            } else {
+                val extra = RootShell.execForOutput(
+                    "echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null); " +
+                    "echo GW=$(ip route get 8.8.8.8 2>/dev/null | grep -oE 'via [0-9.]+' | awk '{print $2}')",
+                    timeoutMs = 8000
+                )
+                val f = extra.lines().mapNotNull {
+                    val i = it.indexOf('=')
+                    if (i > 0) it.substring(0, i) to it.substring(i + 1).trim() else null
+                }.toMap()
+                val gw = f["GW"].orEmpty()
+                append(
+                    "Phone MAC    : ${f["MAC"]?.ifEmpty { null } ?: "—"}\n" +
+                    "Router IP    : ${gw.ifEmpty { "—" }}\n"
+                )
+                if (gw.isNotEmpty()) {
+                    val mac = RootShell.execForOutput(
+                        "ip neigh show $gw 2>/dev/null | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1",
+                        timeoutMs = 5000
+                    ).trim()
+                    append("Router MAC   : ${mac.ifEmpty { "—" }}\n")
+                }
+
+                append("\n— reachability —\n")
+                if (gw.isNotEmpty()) append("Router  : ${pingAvg(gw)}\n")
+                val server = getSharedPreferences("gateway", MODE_PRIVATE)
+                    .getString("server", "") ?: ""
+                if (server.isNotEmpty()) append("SIP srv : ${pingAvg(server)}  ($server)\n")
+            }
+        }, "link-details").start()
+    }
+
+    /** Mobile facts the framework answers instantly. */
+    @SuppressLint("MissingPermission")
+    private fun mobileDetailsFast(): String = buildString {
+        try {
+            val tm = getSystemService(TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+            appendLine("Operator     : ${tm.networkOperatorName.ifEmpty { "—" }}")
+            appendLine("MCC/MNC      : ${tm.networkOperator.ifEmpty { "—" }}")
+            appendLine("Country      : ${tm.networkCountryIso.uppercase().ifEmpty { "—" }}")
+            appendLine("SIM operator : ${tm.simOperatorName.ifEmpty { "—" }}")
+            appendLine("SIM state    : ${simStateName(tm.simState)}")
+            appendLine("Roaming      : ${if (tm.isNetworkRoaming) "yes" else "no"}")
+            appendLine("Data network : ${networkTypeName(tm.dataNetworkType)}")
+            appendLine("Voice network: ${networkTypeName(tm.voiceNetworkType)}")
+            tm.signalStrength?.cellSignalStrengths?.forEachIndexed { i, c ->
+                appendLine(
+                    "Signal[$i]    : ${c.dbm} dBm, level ${c.level}/4 " +
+                        "(${c.javaClass.simpleName.removePrefix("CellSignalStrength")})"
+                )
+            }
+        } catch (e: Exception) {
+            appendLine("telephony: ${e.message}")
+        }
+    }
+
+    /** WiFi facts the framework answers instantly. */
+    private fun wifiDetailsFast(): String = buildString {
+        try {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE)
+                as android.net.wifi.WifiManager
+            appendLine("Enabled      : ${if (wm.isWifiEnabled) "yes" else "no"}")
+            @Suppress("DEPRECATION")
+            val info = wm.connectionInfo
+            // Real SSID/BSSID: these read "<unknown ssid>" / 02:00:00:00:00:00
+            // without location, which the Magisk module now grants on boot.
+            @Suppress("DEPRECATION")
+            val ssidRaw = info?.ssid?.trim('"').orEmpty()
+            appendLine(
+                "SSID         : " +
+                    if (ssidRaw.isEmpty() || ssidRaw.contains("unknown", true)) "—" else ssidRaw
+            )
+            @Suppress("DEPRECATION")
+            val bssid = info?.bssid.orEmpty()
+            appendLine(
+                "BSSID (AP)   : " +
+                    if (bssid.isEmpty() || bssid.startsWith("02:00:00")) "—" else bssid
+            )
+            appendLine("Security     : ${wifiSecurityName(info)}")
+            @Suppress("DEPRECATION")
+            val freq = info?.frequency ?: 0
+            @Suppress("DEPRECATION")
+            appendLine("Link speed   : ${info?.linkSpeed ?: -1} Mbps")
+            appendLine("Frequency    : $freq MHz (${if (freq > 4000) "5 GHz" else "2.4 GHz"})")
+            @Suppress("DEPRECATION")
+            appendLine("RSSI         : ${info?.rssi ?: 0} dBm")
+
+            // IP and DNS come from LinkProperties: no root, no permission, and
+            // it reports what the network actually resolved with.
+            val cm = getSystemService(ConnectivityManager::class.java)
+            val lp = cm?.activeNetwork?.let { cm.getLinkProperties(it) }
+            val ip = lp?.linkAddresses?.firstOrNull { it.address.hostAddress?.contains('.') == true }
+            appendLine("IP address   : ${ip?.address?.hostAddress ?: "—"}")
+            val dns = lp?.dnsServers?.mapNotNull { it.hostAddress }?.joinToString(", ")
+            appendLine("DNS          : ${dns?.ifEmpty { null } ?: "—"}")
+        } catch (e: Exception) {
+            appendLine("wifi: ${e.message}")
+        }
+    }
+
+    /**
+     * Serving cell and neighbours.  Can take a moment — the radio is polled —
+     * so it is called off the main thread.
+     */
+    @SuppressLint("MissingPermission")
+    private fun describeCells(): String {
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return "needs location permission (granted by the Magisk module on boot)"
+
+        return try {
+            val tm = getSystemService(TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+            val cells = tm.allCellInfo
+            if (cells.isNullOrEmpty()) return "none reported"
+            cells.take(6).joinToString("\n") { describeCell(it) }
+        } catch (e: Exception) {
+            "unavailable: ${e.message}"
+        }
+    }
+
+    private fun describeCell(info: android.telephony.CellInfo): String {
+        val tag = if (info.isRegistered) "serving" else "neighbour"
+        fun v(x: Int) = if (x == Int.MAX_VALUE) "—" else x.toString()
+        return when (info) {
+            is android.telephony.CellInfoLte -> {
+                val id = info.cellIdentity
+                "LTE $tag  ci=${v(id.ci)} pci=${v(id.pci)} tac=${v(id.tac)} " +
+                    "earfcn=${v(id.earfcn)} ${id.mccString ?: "—"}/${id.mncString ?: "—"} " +
+                    "${info.cellSignalStrength.dbm}dBm"
+            }
+            is android.telephony.CellInfoNr -> {
+                val id = info.cellIdentity as? android.telephony.CellIdentityNr
+                "5G $tag  nci=${id?.nci ?: "—"} pci=${v(id?.pci ?: Int.MAX_VALUE)} " +
+                    "tac=${v(id?.tac ?: Int.MAX_VALUE)} ${id?.mccString ?: "—"}/${id?.mncString ?: "—"} " +
+                    "${info.cellSignalStrength.dbm}dBm"
+            }
+            is android.telephony.CellInfoWcdma -> {
+                val id = info.cellIdentity
+                "WCDMA $tag  cid=${v(id.cid)} lac=${v(id.lac)} psc=${v(id.psc)} " +
+                    "${id.mccString ?: "—"}/${id.mncString ?: "—"} ${info.cellSignalStrength.dbm}dBm"
+            }
+            is android.telephony.CellInfoGsm -> {
+                val id = info.cellIdentity
+                "GSM $tag  cid=${v(id.cid)} lac=${v(id.lac)} arfcn=${v(id.arfcn)} " +
+                    "${id.mccString ?: "—"}/${id.mncString ?: "—"} ${info.cellSignalStrength.dbm}dBm"
+            }
+            else -> "${info.javaClass.simpleName.removePrefix("CellInfo")} $tag"
+        }
+    }
+
+    /**
+     * The link's security type — the cipher in use, not the passphrase.
+     * The stored key is deliberately not shown: it is the network's actual
+     * credential and a diagnostics panel is the wrong place for it.
+     */
+    private fun wifiSecurityName(info: android.net.wifi.WifiInfo?): String {
+        if (info == null) return "—"
+        return try {
+            when (info.currentSecurityType) {
+                android.net.wifi.WifiInfo.SECURITY_TYPE_OPEN -> "open (none)"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_WEP -> "WEP"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_PSK -> "WPA/WPA2-PSK"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_EAP -> "WPA-EAP"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_SAE -> "WPA3-SAE"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_OWE -> "OWE (enhanced open)"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_WAPI_PSK -> "WAPI-PSK"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_WAPI_CERT -> "WAPI-CERT"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE -> "WPA3-Enterprise"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT ->
+                    "WPA3-Enterprise 192-bit"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_PASSPOINT_R1_R2 -> "Passpoint R1/R2"
+                android.net.wifi.WifiInfo.SECURITY_TYPE_PASSPOINT_R3 -> "Passpoint R3"
+                else -> "unknown"
+            }
+        } catch (e: Exception) {
+            "—"
+        }
+    }
+
+    /** Average round-trip to a host, or why it failed. */
+    private fun pingAvg(host: String): String {
+        val out = RootShell.execForOutput("ping -c 3 -W 2 $host 2>&1 | tail -2", timeoutMs = 12000)
+        val avg = Regex("= [0-9.]+/([0-9.]+)/").find(out)?.groupValues?.getOrNull(1)
+        val loss = Regex("([0-9]+)% packet loss").find(out)?.groupValues?.getOrNull(1)
+        return when {
+            avg != null -> "$avg ms avg" + (loss?.let { ", $it% loss" } ?: "")
+            loss == "100" -> "no reply (100% loss)"
+            else -> out.lines().firstOrNull { it.isNotBlank() } ?: "unreachable"
+        }
+    }
+
+    private fun simStateName(state: Int): String = when (state) {
+        android.telephony.TelephonyManager.SIM_STATE_READY -> "ready"
+        android.telephony.TelephonyManager.SIM_STATE_ABSENT -> "absent"
+        android.telephony.TelephonyManager.SIM_STATE_PIN_REQUIRED -> "PIN required"
+        android.telephony.TelephonyManager.SIM_STATE_PUK_REQUIRED -> "PUK required"
+        android.telephony.TelephonyManager.SIM_STATE_NETWORK_LOCKED -> "network locked"
+        android.telephony.TelephonyManager.SIM_STATE_NOT_READY -> "not ready"
+        else -> "unknown($state)"
     }
 
     private fun setCallFilter(filter: String) {
@@ -639,7 +891,7 @@ class MainActivity : AppCompatActivity() {
         val off = ContextCompat.getColor(this, R.color.btn_secondary)
         val offText = ContextCompat.getColor(this, R.color.text_primary)
         for ((btn, name) in listOf(
-            btnFilterAll to "all", btnFilterRecent to "recent", btnFilterMissed to "missed"
+            btnFilterAll to "all", btnFilterIncoming to "in", btnFilterOutgoing to "out"
         )) {
             val active = name == filter
             btn.backgroundTintList = ColorStateList.valueOf(if (active) on else off)
@@ -651,11 +903,9 @@ class MainActivity : AppCompatActivity() {
     /** Recent calls on the home view, newest first. */
     private fun renderHomeTraffic() {
         val all = try { CallLogStore.getEntries(this) } catch (_: Exception) { emptyList() }
-        // "missed" is a call that never carried audio — the bridge failed or
-        // the caller gave up before the agent answered.
         val entries = when (callFilter) {
-            "recent" -> all.take(10)
-            "missed" -> all.filter { it.durationSec <= 0 }
+            "in" -> all.filter { it.direction == "IN" }
+            "out" -> all.filter { it.direction != "IN" }
             else -> all
         }
         homeTrafficList.removeAllViews()
@@ -724,12 +974,8 @@ class MainActivity : AppCompatActivity() {
             uptimeRunnable.run()
         }
 
-        // Opening the app mid-call should land on the in-call screen.  The
-        // service cannot bring it up itself while running headless, so this is
-        // the only path to it during a gateway call.
-        if (!inCallOpen && com.callagent.gateway.gsm.GsmCallManager.activeCall != null) {
-            com.callagent.gateway.gsm.GsmCallManager.currentNumber?.let { openInCallScreen(it) }
-        }
+        // The old full-screen in-call view is superseded by the live call
+        // card on the home view; it is no longer opened automatically.
 
         if (inCallOpen) {
             if (com.callagent.gateway.gsm.GsmCallManager.activeCall == null &&
@@ -1501,9 +1747,8 @@ class MainActivity : AppCompatActivity() {
         if (inCallOpen) return
 
         if (gsmCallActive || com.callagent.gateway.gsm.GsmCallManager.activeCall != null) {
-            val num = com.callagent.gateway.gsm.GsmCallManager.currentNumber
-                ?: tvDialNumber.text.toString().trim()
-            if (num.isNotEmpty()) openInCallScreen(num)
+            // A call is already up — the home view shows it.
+            switchTab("home")
             return
         }
 
@@ -1524,7 +1769,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        openInCallScreen(number)
+        switchTab("home")
 
         if (running) {
             val intent = Intent(this, GatewayService::class.java).apply {

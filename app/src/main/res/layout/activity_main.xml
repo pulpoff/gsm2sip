@@ -133,10 +133,10 @@
                         android:layout_marginEnd="8dp" />
 
                     <Button
-                        android:id="@+id/btnFilterRecent"
+                        android:id="@+id/btnFilterIncoming"
                         android:layout_width="wrap_content"
                         android:layout_height="42dp"
-                        android:text="Recent"
+                        android:text="Incoming"
                         android:textSize="13sp"
                         android:textAllCaps="false"
                         android:textColor="@color/text_primary"
@@ -148,10 +148,10 @@
                         android:layout_marginEnd="8dp" />
 
                     <Button
-                        android:id="@+id/btnFilterMissed"
+                        android:id="@+id/btnFilterOutgoing"
                         android:layout_width="wrap_content"
                         android:layout_height="42dp"
-                        android:text="Missed"
+                        android:text="Outgoing"
                         android:textSize="13sp"
                         android:textAllCaps="false"
                         android:textColor="@color/text_primary"

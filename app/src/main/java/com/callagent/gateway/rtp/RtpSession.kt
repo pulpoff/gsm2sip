@@ -66,6 +66,7 @@ class RtpSession(
     @Volatile private var monitorTrack: AudioTrack? = null
     /** Most recent caller frame, 16-bit mono at [captureRate], for mixing. */
     @Volatile private var lastCallerFrame: ByteArray? = null
+    private var monitorFrames = 0L
 
     /** Silence the agent towards the caller without disturbing the bridge.
      *  RTP keeps flowing in both directions and the SIP call stays up; only the
@@ -1153,7 +1154,14 @@ class RtpSession(
                 val t = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            // Deliberately NOT USAGE_MEDIA.  Media maps to
+                            // STREAM_MUSIC, and this bridge sets
+                            // incall_music_enabled=true precisely so that
+                            // STREAM_MUSIC is injected into the modem uplink —
+                            // so a monitor track on USAGE_MEDIA would be sent
+                            // to the caller instead of the speaker, which is
+                            // the opposite of what monitoring is for.
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                     )
@@ -1220,6 +1228,15 @@ class RtpSession(
                 i += 2
             }
             t.write(out, 0, out.size)
+            if (++monitorFrames % 250 == 0L) {
+                // Which side is actually audible in the monitor.
+                Log.i(
+                    TAG,
+                    "Monitor mix: agentRMS=${pcmRms(agentPcm)} " +
+                        "callerRMS=${caller?.let { pcmRms(it) } ?: -1} " +
+                        "routedTo=${t.routedDevice?.type}"
+                )
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Monitor write failed: ${e.message}")
         }

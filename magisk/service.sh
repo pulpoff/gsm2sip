@@ -49,6 +49,8 @@ for PERM in \
     android.permission.READ_PHONE_STATE \
     android.permission.READ_PHONE_NUMBERS \
     android.permission.READ_CALL_LOG \
+    android.permission.ACCESS_FINE_LOCATION \
+    android.permission.ACCESS_COARSE_LOCATION \
     android.permission.CALL_PHONE \
     android.permission.ANSWER_PHONE_CALLS \
     android.permission.POST_NOTIFICATIONS \
