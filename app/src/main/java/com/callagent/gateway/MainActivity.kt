@@ -139,6 +139,9 @@ class MainActivity : AppCompatActivity() {
     private var monitoring = false
     /** True while a call is bridged, so SNOOP is only offered when it can work. */
     private var callLive = false
+    /** Whether the gateway is actually registered, as opposed to merely
+     *  running.  Drives the pill and gates the manual retry. */
+    private var gatewayOnline = false
     private var inCallOpen = false
     private var inCallOpenTime = 0L
     private var viewBeforeInCall = "dialer"
@@ -322,6 +325,12 @@ class MainActivity : AppCompatActivity() {
         // Tapping the status pill retries the connection, the way the old
         // settings screen's reconnect button did.
         tvHomeStatusPill.setOnClickListener {
+            if (gatewayOnline) {
+                // Already registered — reconnecting would drop a working
+                // registration and send SIP the server did not need.
+                Toast.makeText(this, "Registered", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             appendLog("Reconnect requested")
             Toast.makeText(this, "Reconnecting…", Toast.LENGTH_SHORT).show()
             startService(Intent(this, GatewayService::class.java).apply {
@@ -518,7 +527,15 @@ class MainActivity : AppCompatActivity() {
     private fun updateHomeCall(state: String, info: String) {
         if (!::homeCallCard.isInitialized) return
 
-        val online = state != "STOPPED" && state != "ERROR"
+        // "Online" means registered, not merely running: while connecting or
+        // retrying the gateway cannot take a call, and the pill should say so
+        // — it is also the tap target for a manual retry.
+        val online = when (state) {
+            "STOPPED", "ERROR", "STARTING" -> false
+            "IDLE" -> info == "SIP registered"
+            else -> true            // any call state means registration held
+        }
+        gatewayOnline = online
         tvHomeStatusPill.text = if (online) "● Online" else "● Offline"
         tvHomeStatusPill.setTextColor(
             Color.parseColor(if (online) "#34D399" else "#F87171")

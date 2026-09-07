@@ -75,17 +75,16 @@ What has actually been checked so far:
 | Device | SoC | Vendor | Result |
 |---|---|---|---|
 | Poco X3 NFC | SM6150/SM7150 | Xiaomi (MIUI) | fully working, verified on live calls |
-| Galaxy Tab S5e | SDM710 | Samsung | `incall_music_uplink` → `Telephony Tx` present; no telephony hardware, so not usable as a gateway |
 | Galaxy S4 Mini | MSM8930 | — | `incall_music` present; digital capture untested |
 | Galaxy S10e | Exynos 9820 | — | no path in either direction |
 
-Two different SoCs from two different OEMs both declare
-`incall_music_uplink` routed to `Telephony Tx`, with the same
-`AUDIO_CHANNEL_OUT_STEREO` constraint, which suggests most Qualcomm phones are
-candidates.  A new device still needs a `DeviceProfile` entry: the mixer names
-are generic but the front-end the track lands on is not, and the
-`Mixer BEFORE/AFTER` lines logged around each call show which one it is.
-An unrecognised Qualcomm device falls back to `genericQualcomm()`.
+Everything the working profile depends on is generic Qualcomm audio, so other
+Qualcomm phones are plausible candidates — but the deciding factors live in the
+vendor image, which is exactly what the script above inspects.  A new device
+still needs a `DeviceProfile` entry: the mixer names are generic, the front-end
+the playback track lands on is not, and the `Mixer BEFORE/AFTER` lines logged
+around each call show which one it is.  An unrecognised Qualcomm device falls
+back to `genericQualcomm()`.
 
 Getting digital capture on a Qualcomm device depends on one thing that is easy
 to miss.  The HAL gates in-call recording — and the per-session voice mutes —
