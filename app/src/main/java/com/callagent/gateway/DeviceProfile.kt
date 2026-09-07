@@ -541,14 +541,16 @@ data class DeviceProfile(
                 append("echo -n 'NSRC2B='; tinymix 'ABOX NSRC2 Bridge' 2>&1; ")
                 append("echo -n 'SPUS0='; tinymix 'ABOX SPUS OUT0' 2>&1")
             },
-            // UNVERIFIED on hardware — no SIM service on the S10e here, so
-            // this could not be tested.  setPreferredDevice is a framework API
-            // rather than a Qualcomm one, and on SM6150 it was what finally
-            // moved playback into the modem uplink after every mixer-level
-            // attempt had failed.  The S10e never got injection working at all,
-            // so it is worth trying.  routeToTelephonyTx() logs the available
-            // output devices and does nothing if TYPE_TELEPHONY is absent.
-            playbackToTelephonyTx = true,
+            // Deliberately NOT set: there is nothing on this device to route
+            // to.  Checked on the hardware — /vendor/etc/audio_policy_configuration.xml
+            // declares three mixPorts (deep, fast, primary) and contains no
+            // telephony device at all, and audio.primary.universal9820.so has
+            // no TELEPHONY_TX, no incall_rec usecases and no voice_extn
+            // call_state/vsid handling.  Against SM6150, where
+            // incall_music_uplink -> Telephony Tx is what carries injected
+            // audio into the modem, this device simply has no equivalent.
+            // Neither direction can be done digitally here; that is why the
+            // gateway moved to a Qualcomm device.
             musicVolPercent = 40,  // v2.8.45@30%+2x=audible but quiet. Raise for clarity.
             captureGain = 10,      // VOICE_RECOGNITION captures very quietly (rawCapRMS~2)
             playbackGain = 2,      // 40%+2x = moderate, SIFS0 only = no feedback

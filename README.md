@@ -46,9 +46,13 @@ stays `CALL_INACTIVE`, so `VOICE_CALL`, `VOICE_DOWNLINK` and the `VOC_REC_*`
 mixers all return silence.  The app announces the call itself
 (`vsid=<hex>;call_state=2`) before opening `AudioRecord`.
 
-The Exynos S10e has no equivalent: no `incall_music` mixer and no in-call
-capture, so audio can only be coupled acoustically.  That was the reason for
-moving to a Qualcomm device.
+The Exynos S10e has no equivalent, and this was confirmed on the hardware
+rather than inferred: `audio_policy_configuration.xml` declares three mixPorts
+(`deep`, `fast`, `primary`) and no telephony device, and
+`audio.primary.universal9820.so` contains no `TELEPHONY_TX`, no `incall_rec`
+usecases and no `voice_extn` `call_state`/`vsid` handling.  There is nothing to
+inject into and nothing to capture from, so neither direction can be digital.
+That is why the gateway moved to a Qualcomm device.
 
 ## Requirements
 
