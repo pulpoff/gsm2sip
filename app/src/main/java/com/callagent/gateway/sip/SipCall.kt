@@ -45,7 +45,7 @@ class SipCall(
     var localRtpPort: Int = 0
     var remoteRtpPort: Int = 0
     var remoteRtpAddress: String? = null
-    var negotiatedPayloadType: Int = 8 // default PCMA, updated from SDP
+    var negotiatedPayloadType: Int = 9 // default G.722, updated from SDP
 
     // Caller info (for inbound and outbound caller-ID)
     var callerNumber: String? = null

@@ -357,6 +357,23 @@ object GsmCallManager {
         try {
             am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0)
         } catch (_: SecurityException) {}
+
+        if (profile.silenceLocalAudio) {
+            // Digital bridge: silence the handset itself.  Done through
+            // AudioManager because it goes via the HAL, unlike the ALSA voice
+            // mutes which the HAL overwrites when it programs the call path.
+            try {
+                am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0)
+            } catch (_: SecurityException) {}
+            try {
+                am.isMicrophoneMute = true
+            } catch (e: Exception) {
+                Log.w(TAG, "Mic mute failed: ${e.message}")
+            }
+            appLog("Local audio silenced: speaker muted, mic muted (digital only)")
+            return
+        }
+
         // Voice call volume: controls caller's voice on speaker.
         // MSM8930: minimum (1) — speaker silenced by muteVoiceRx via tinymix.
         // Exynos 9820: 80% — no muteVoiceRx, need loud speaker for mic capture.
@@ -402,6 +419,7 @@ object GsmCallManager {
 
                     // Unmute voice call stream and restore volume for normal phone use
                     try {
+                        try { am.isMicrophoneMute = false } catch (_: Exception) {}
                         am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0)
                     } catch (_: SecurityException) {}
                     try {

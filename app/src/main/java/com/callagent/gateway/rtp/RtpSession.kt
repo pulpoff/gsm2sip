@@ -112,7 +112,7 @@ class RtpSession(
     // (when decayingPlaybackRms <= echoGateThreshold) to avoid false resets
     // from incall_music echo leaking back through VOICE_CALL capture.
     private val SILENCE_RMS_THRESHOLD = 10   // Below this = truly dead source (ADC noise floor)
-    private val SILENCE_FRAME_LIMIT = 25     // 25 non-echo frames (~0.5s) — fast fallback for testing
+    private val SILENCE_FRAME_LIMIT get() = profile.captureSilenceFrames
 
     var listener: Listener? = null
 
@@ -177,6 +177,13 @@ class RtpSession(
      * does NOT inject via incall_music — that's why SIP→GSM was silent.
      */
     private fun initAudio(): Boolean {
+        // Before anything is opened: in-call recording and the per-session
+        // voice mutes are gated on the HAL's is_call_active flag, and the HAL
+        // chooses the input usecase when the record stream is created.  Telling
+        // it after AudioRecord exists is too late — VOICE_CALL is already bound
+        // to a plain capture path and returns silence.
+        setHalCallState(2)
+
         // Playback rate matches codec output rate.  G.722 decodes to 16 kHz.
         playbackRate = when (payloadType) {
             RtpPacket.PT_PCMA, RtpPacket.PT_PCMU -> 8000
@@ -226,6 +233,21 @@ class RtpSession(
         configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_RECOGNITION, "VOICE_RECOGNITION", 8000))
         configs.add(SourceConfig(MediaRecorder.AudioSource.MIC, "MIC", 8000))
         configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "VOICE_COMMUNICATION", 8000))
+
+        if (profile.voiceDownlinkWorks) {
+            // Where the modem downlink is capturable, it is the only source we
+            // want: VOICE_CALL mixes uplink AND downlink, and the uplink now
+            // carries the agent's own injected voice, so the agent hears itself
+            // folded into the caller — which is what the far end perceives as
+            // noise.  The downlink alone is the caller.  Acoustic sources stay
+            // behind it purely as a last resort.
+            configs.removeAll { it.source == MediaRecorder.AudioSource.VOICE_CALL }
+            val downlink = configs.filter {
+                it.source == MediaRecorder.AudioSource.VOICE_DOWNLINK
+            }
+            configs.removeAll(downlink)
+            configs.addAll(0, downlink)
+        }
         // VOICE_DOWNLINK (source 3): DEAD LAST — on MSM8930 it initializes
         // successfully (STATE_INITIALIZED) but captures SILENCE because the
         // Incall_Rec mixer controls don't exist on this SoC.  If it were
@@ -547,6 +569,21 @@ class RtpSession(
         configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_RECOGNITION, "VOICE_RECOGNITION", 8000))
         configs.add(SourceConfig(MediaRecorder.AudioSource.MIC, "MIC", 8000))
         configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "VOICE_COMMUNICATION", 8000))
+
+        if (profile.voiceDownlinkWorks) {
+            // Where the modem downlink is capturable, it is the only source we
+            // want: VOICE_CALL mixes uplink AND downlink, and the uplink now
+            // carries the agent's own injected voice, so the agent hears itself
+            // folded into the caller — which is what the far end perceives as
+            // noise.  The downlink alone is the caller.  Acoustic sources stay
+            // behind it purely as a last resort.
+            configs.removeAll { it.source == MediaRecorder.AudioSource.VOICE_CALL }
+            val downlink = configs.filter {
+                it.source == MediaRecorder.AudioSource.VOICE_DOWNLINK
+            }
+            configs.removeAll(downlink)
+            configs.addAll(0, downlink)
+        }
         if (!profile.voiceDownlinkWorks) {
             if (wideband) {
                 configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_DOWNLINK, "VOICE_DOWNLINK@16k", 16000))
@@ -596,6 +633,8 @@ class RtpSession(
     fun stop() {
         if (!running.getAndSet(false)) return
         Log.i(TAG, "Stopping RTP session on port $localPort")
+
+        setHalCallState(1)
 
         audioRecord?.let {
             try { it.stop() } catch (_: Exception) {}
@@ -685,6 +724,18 @@ class RtpSession(
         val record = audioRecord ?: return false
 
         record.startRecording()
+
+        // Re-assert in-call capture routing now that the stream exists — see
+        // DeviceProfile.mixerCaptureCmd.  Off the capture thread, because the
+        // su round-trip takes ~100ms and would stall the first RTP frames.
+        val capCmd = DeviceProfile.resolveCmd(profile.mixerCaptureCmd)
+        if (capCmd.isNotEmpty()) {
+            Thread({
+                val out = RootShell.execForOutput(capCmd, timeoutMs = 8000)
+                Log.i(TAG, "Mixer capture routing: $out")
+            }, "mixer-capture").start()
+        }
+
         Log.i(TAG, "Capture routedFrom=${record.routedDevice?.type}")
         Log.i(TAG, "Capture started: source=$audioSourceName capRate=$captureRate session=$audioSessionId gain=${captureGain}x profile=${profile.name} state=${record.recordingState}")
         // Also report via RTP stats so it appears in the app log viewer
@@ -1021,6 +1072,23 @@ class RtpSession(
         return out
     }
 
+    /**
+     * Mark the voice sessions ACTIVE (2) or INACTIVE (1) with the audio HAL.
+     * See DeviceProfile.halCallActiveVsids for why this is needed at all.
+     */
+    private fun setHalCallState(state: Int) {
+        if (profile.halCallActiveVsids.isEmpty()) return
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            for (vsid in profile.halCallActiveVsids) {
+                am.setParameters("vsid=$vsid;call_state=$state")
+            }
+            Log.i(TAG, "HAL call_state=$state for ${profile.halCallActiveVsids}")
+        } catch (e: Exception) {
+            Log.w(TAG, "setHalCallState($state) failed: ${e.message}")
+        }
+    }
+
     private fun playbackLoop() {
         val track = audioTrack ?: return
 
@@ -1031,12 +1099,18 @@ class RtpSession(
         Log.i(TAG, "Playback started (rate=$playbackRate usage=$playbackUsageName deepBuffer=true) " +
             "routedTo=${track.routedDevice?.type}")
 
-        // CRITICAL: Set incall_music_enabled=true AFTER AudioTrack.play().
-        // The Qualcomm HAL starts the incall-music usecase only when there
-        // is an active STREAM_MUSIC output.  If set before AudioTrack exists,
-        // the HAL routes through deep-buffer-playback instead of incall-music,
-        // and the audio never reaches the voice TX (uplink).
-        enableIncallMusic()
+        // Set incall_music_enabled=true AFTER AudioTrack.play(): the Qualcomm
+        // HAL on MSM8930 starts the incall-music usecase only once there is an
+        // active STREAM_MUSIC output.
+        //
+        // Skipped where the profile already set it before the track existed.
+        // Toggling it again here reconfigures the voice path and tears down the
+        // in-call record session the HAL has just started — measured on SM6150:
+        // VOICE_CALL delivered real audio (rawRMS=208) until this second toggle
+        // fired 8ms later, after which capture went to zero.
+        if (!profile.incallMusicBeforeTrack) {
+            enableIncallMusic()
+        }
         // Set mixer controls via root — also handles Voice Tx Mute=0.
         // No separate ensureVoiceTxOpen() call here: the mixer thread below
         // already issues that command, and waiting for su -c was blocking
@@ -1370,6 +1444,11 @@ class RtpSession(
     private fun reToggleIncallMusic() {
         val param = profile.incallMusicParam
         if (param.isEmpty()) return
+        if (profile.incallMusicBeforeTrack) {
+            // The toggle is what kills in-call capture on this HAL; the
+            // pre-track set has already done the job.
+            return
+        }
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             am?.let {

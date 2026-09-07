@@ -526,7 +526,7 @@ class CallOrchestrator(
     // ── RTP ─────────────────────────────────────────────
 
     private fun startRtp(localPort: Int, remoteAddr: String, remotePort: Int,
-                         payloadType: Int = RtpPacket.PT_PCMA) {
+                         payloadType: Int = RtpPacket.PT_G722) {
         // Re-assert RECORD_AUDIO appops SYNCHRONOUSLY before AudioRecord
         // creation.  Must complete before RtpSession.start() so AudioFlinger
         // sees "allow" when the record thread begins reading.  Running async

@@ -15,3 +15,14 @@ persist.audio.fluence.voicecall=false
 # Allow concurrent audio capture during voice calls.
 # Samsung HAL may use these to gate VOICE_CALL capture.
 persist.audio.call_record.enabled=true
+
+# ── In-call capture (Qualcomm SM6150/SM7150) ──
+# The audio HAL is feature-flag driven and ships with capture-during-playback
+# switched off, which is why AudioSource.VOICE_CALL, VOICE_DOWNLINK and the
+# VOC_REC_* mixers all return digital silence while a voice call is up — the
+# gateway is then forced to capture the caller acoustically, through the
+# phone's own speaker and microphone.
+# incall_music.enable is already true on this vendor image, which is why
+# injection into the modem uplink works.
+vendor.audio.feature.concurrent_capture.enable=true
+vendor.audio.feature.record_play_concurency.enable=true
