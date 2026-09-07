@@ -5,7 +5,8 @@
 <h1 align="center">gsm2sip</h1>
 
 <p align="center">
-Android app that bridges GSM calls (local SIM) with the callagent.pro SIP/Asterisk server.
+Bridges GSM calls on an Android phone's SIM to any SIP server.
+Server, port, credentials and codec are configured in the app.
 </p>
 
 | Dialer | SIP Registration |
@@ -16,17 +17,25 @@ Android app that bridges GSM calls (local SIM) with the callagent.pro SIP/Asteri
 
 A dedicated rooted Android phone with a local SIM card acts as a SIP-to-GSM gateway:
 
-- **Inbound**: Someone calls the local number → phone auto-answers → bridges to Asterisk via SIP → AI agent handles the call
-- **Outbound**: Asterisk sends SIP INVITE with `X-GSM-Forward: +<number>` header → phone dials the destination via GSM SIM → bridges audio back to SIP
+- **Inbound**: Someone calls the SIM's number → the phone answers → the call is bridged to the SIP server, which routes it wherever the dialplan says (an AI agent, a queue, an extension)
+- **Outbound**: the SIP server sends an INVITE with an `X-GSM-Forward: +<number>` header → the phone dials that number over GSM → audio is bridged back to SIP
 
 Audio flows through shared speaker/mic — both GSM and SIP audio run concurrently on the same hardware, enabled by a Magisk module that disables Android's audio concurrency restrictions.
 
 ## Audio Codec
 
-G.722 wideband (16 kHz, 64 kbps).  It is the only codec offered in the SDP —
-listing G.711 alongside it meant servers picked PCMA and every call ran
-narrowband.  G.711 is still accepted when answering a server that offers
-nothing else.
+Selectable in Settings, defaulting to **G.722 only** (wideband, 16 kHz):
+
+| Setting | Offered in SDP |
+|---|---|
+| G.722 only *(default)* | `9` |
+| G.722 preferred, G.711 allowed | `9 8 0` |
+| G.711 only | `8 0` |
+
+The default is G.722 alone because offering G.711 alongside it means servers
+routinely pick G.711 and every call ends up narrowband regardless of what both
+ends support.  Whatever is configured, the app still answers with a codec the
+remote actually offered rather than failing a call over a preference.
 
 ## Supported Devices
 
@@ -125,15 +134,17 @@ Only the Magisk module needs to be installed — it includes the APK and handles
 
 1. **Install Magisk module**: Copy `gateway-magisk.zip` to device, install via Magisk Manager → Modules
 2. **Reboot** the device — the module installs the APK as a privileged system app and grants all permissions on boot
-3. **Set as default phone app**: Settings → Apps → Default apps → Phone app → SIP-GSM Gateway
-4. **Configure SIP**: Enter your Asterisk server address, port, username, and password
+3. **Set as default phone app**: Settings → Apps → Default apps → Phone app → gsm2sip
+4. **Configure SIP**: open Settings in the app (the gear, top right) and enter
+   your SIP server address, port, username and password
 5. **Own Number**: Enter the SIM's own number in international format, e.g.
-   `+4915215320372`.  This is sent as the SIP destination so the server can map
-   the call to an assistant, the same way a Fritz!Box sends the DID that was
-   dialled.  Leaving it unset makes the gateway address its own extension,
+   `+4915215320372`.  This is sent as the SIP destination so the server can
+   route on the number that was dialled, the same way a VoIP router sends the
+   DID.  Leaving it unset makes the gateway address its own extension,
    which most servers route straight back to the device — the call then loops
    and the GSM leg is never answered.
-6. **Start**: Tap START — the app registers with Asterisk and begins bridging calls
+6. **Start**: the gateway registers and begins bridging calls; the header pill
+   shows **Online** once registration succeeds (tap it to retry)
 
 ### What the SIP leg carries
 
@@ -142,11 +153,15 @@ Only the Magisk module needs to be installed — it includes the APK and handles
 - **From** — the calling party, passed through exactly as the carrier delivered
   it (some send `+49…`, some `0…`; the app does not rewrite it).
 
-The server needs a phone-number entry binding the SIM's number to the gateway's
-SIP account and a destination assistant, or the call falls through to the trunk
-instead of reaching the agent.
+Whatever the server routes on, it has to recognise the SIM's number: the
+gateway puts that number in the Request-URI, so a dialplan or number table
+keyed on it is what decides where the call goes.
 
-## Asterisk Configuration
+## Asterisk Configuration (example)
+
+The gateway itself is server-agnostic — it registers like any SIP client. What
+follows is one worked example, using Asterisk to route inbound GSM calls to an
+AI agent. Adapt it to whatever your server does.
 
 ### 1. Create a SIP account for the gateway
 
@@ -218,12 +233,13 @@ same => n,Hangup()
                                            │ SIP/RTP
                                            │ (WiFi)
                                  ┌─────────▼─────────┐
-                                 │  Asterisk Server   │
-                                 │  (CallAgent SIP)   │
+                                 │    SIP Server      │
+                                 │  (Asterisk, etc.)  │
                                  └─────────┬─────────┘
                                            │
                                  ┌─────────▼─────────┐
-                                 │  AI Voice Agent    │
+                                 │ Agent / queue /   │
+                                 │ extension         │
                                  └───────────────────┘
 ```
 
