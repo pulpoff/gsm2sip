@@ -17,11 +17,43 @@ Audio flows through shared speaker/mic — both GSM and SIP audio run concurrent
 
 ## Audio Codec
 
-G.722 wideband (16 kHz, 64 kbps) for high quality voice. Falls back to G.711 A-law if needed.
+G.722 wideband (16 kHz, 64 kbps).  It is the only codec offered in the SDP —
+listing G.711 alongside it meant servers picked PCMA and every call ran
+narrowband.  G.711 is still accepted when answering a server that offers
+nothing else.
+
+## Supported Devices
+
+| Device | SoC | Agent → caller | Caller → agent |
+|---|---|---|---|
+| Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | **digital**, via `VOICE_DOWNLINK` |
+| Samsung Galaxy S4 Mini | Qualcomm MSM8930, WCD9304 | digital, via `incall_music` | acoustic (mic hears the speaker) |
+| Samsung Galaxy S10e | Exynos 9820, CS47L93 | not working | not working |
+
+The Poco X3 is the reference device: it is the only one where the phone's own
+microphone and speaker are muted and both directions run through the modem.
+
+Getting digital capture on a Qualcomm device depends on one thing that is easy
+to miss.  The HAL gates in-call recording — and the per-session voice mutes —
+on `voice_is_call_state_active()`, and on LineageOS that flag is never set:
+
+```
+voice_extn: update_call_states is_call_active:0 in_call:1, mode:2
+```
+
+`MODE_IN_CALL` is set and the modem's voice session is running, yet every VSID
+stays `CALL_INACTIVE`, so `VOICE_CALL`, `VOICE_DOWNLINK` and the `VOC_REC_*`
+mixers all return silence.  The app announces the call itself
+(`vsid=<hex>;call_state=2`) before opening `AudioRecord`.
+
+The Exynos S10e has no equivalent: no `incall_music` mixer and no in-call
+capture, so audio can only be coupled acoustically.  That was the reason for
+moving to a Qualcomm device.
 
 ## Requirements
 
-- **Device**: Samsung Galaxy S10e (or similar) with LineageOS + Magisk root
+- **Device**: Qualcomm-based Android phone with LineageOS + Magisk root
+  (developed against a Poco X3 NFC on Android 16)
 - **SIM**: SIM card with voice plan
 - **Network**: Stable WiFi connection
 - **Power**: Always connected to charger
@@ -46,7 +78,24 @@ Only the Magisk module needs to be installed — it includes the APK and handles
 2. **Reboot** the device — the module installs the APK as a privileged system app and grants all permissions on boot
 3. **Set as default phone app**: Settings → Apps → Default apps → Phone app → SIP-GSM Gateway
 4. **Configure SIP**: Enter your Asterisk server address, port, username, and password
-5. **Start**: Tap START — the app registers with Asterisk and begins bridging calls
+5. **Own Number**: Enter the SIM's own number in international format, e.g.
+   `+4915215320372`.  This is sent as the SIP destination so the server can map
+   the call to an assistant, the same way a Fritz!Box sends the DID that was
+   dialled.  Leaving it unset makes the gateway address its own extension,
+   which most servers route straight back to the device — the call then loops
+   and the GSM leg is never answered.
+6. **Start**: Tap START — the app registers with Asterisk and begins bridging calls
+
+### What the SIP leg carries
+
+- **Request-URI / To** — the number that was dialled, i.e. the gateway SIM's
+  MSISDN.  Not the SIP account name.
+- **From** — the calling party, passed through exactly as the carrier delivered
+  it (some send `+49…`, some `0…`; the app does not rewrite it).
+
+The server needs a phone-number entry binding the SIM's number to the gateway's
+SIP account and a destination assistant, or the call falls through to the trunk
+instead of reaching the agent.
 
 ## Asterisk Configuration
 
@@ -102,7 +151,7 @@ same => n,Hangup()
 ```
 ┌─────────────────┐     GSM      ┌──────────────────┐
 │  Remote Caller   │◄───────────►│  Android Phone    │
-│  (local #)       │   voice     │  (S10e + SIM)     │
+│  (local #)       │   voice     │  (Poco X3 + SIM)  │
 └─────────────────┘              │                    │
                                  │  ┌──────────────┐ │
                                  │  │ InCallService │ │  GSM call control
@@ -145,6 +194,21 @@ The `gateway-magisk.zip` module does two critical things:
 
 ## Troubleshooting
 
+- **Agent hears silence**: the foreground service must be started while an
+  Activity is visible. Android 12+ withholds `PROCESS_CAPABILITY_FOREGROUND_MICROPHONE`
+  from a service started in the background, and AudioPolicy then feeds
+  `AudioRecord` zeros without any error (`rec update ... silenced` in
+  `dumpsys audio`). The module launches the UI on boot for this reason.
+- **Agent hears itself / heavy noise**: capture must use `VOICE_DOWNLINK`, not
+  `VOICE_CALL`. The latter mixes uplink and downlink, and the uplink carries
+  the injected agent audio.
+- **Caller hears the room or their own echo**: the phone's mic is in the GSM
+  uplink. Muting it only works through `AudioManager` — the ALSA voice mutes
+  are rewritten by the HAL, and they are 3-element arrays
+  (`{mute, session_vsid, ramp_ms}`), so a single-value `tinymix` write silently
+  does nothing.
+- **Calls loop back and never answer**: the Own Number setting is unset, so the
+  gateway is INVITEing its own extension.
 - **One-way audio**: Ensure the Magisk module is installed and device is rebooted
 - **Echo**: The app uses Android's AcousticEchoCanceler + VOICE_COMMUNICATION mode
 - **SIP not registering**: Check WiFi connectivity, server address, and credentials

@@ -49,8 +49,14 @@ data class DeviceProfile(
      *  The default is deliberately impatient, which is right when the fallback
      *  is a microphone that always works.  Where the digital source is the only
      *  acceptable one, bailing out after half a second throws it away during
-     *  the ordinary gap before the far end starts talking. */
-    val captureSilenceFrames: Int = 25,
+     *  the ordinary gap before the far end starts talking.
+     *
+     *  25 frames was the old hard-coded value and is why in-call capture looked
+     *  impossible on SM6150 for a long time: the source was working, and was
+     *  being discarded during the pause before either party spoke.  The default
+     *  is now 100 (~2s), which is still prompt enough to fall back off a source
+     *  that is genuinely dead. */
+    val captureSilenceFrames: Int = 100,
 
     /** Voice sessions to mark ACTIVE with the audio HAL, as hex VSIDs.
      *
@@ -422,6 +428,15 @@ data class DeviceProfile(
                 append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
                 append("echo -n 'IncallMM2='; tinymix 'Incall_Music Audio Mixer MultiMedia2' 2>&1")
             },
+            // UNVERIFIED — the S4 Mini was not available to test against.
+            // voice_extn is generic Qualcomm code, so the in-call recording
+            // gate (voice_is_call_state_active) is very likely the same one
+            // that kept SM6150 on acoustic capture.  This profile captures the
+            // caller through the microphone today for what may be exactly that
+            // reason.  The HAL rejects VSIDs it does not know, so listing the
+            // full set is harmless; VOICE_SESSION (10c01000) is the one an
+            // MSM8930-era HAL would actually use.
+            halCallActiveVsids = listOf("10c01000", "10dc1000", "11c05000"),
             musicVolPercent = 14,
             captureGain = 2,
             playbackGain = 2,
@@ -526,6 +541,14 @@ data class DeviceProfile(
                 append("echo -n 'NSRC2B='; tinymix 'ABOX NSRC2 Bridge' 2>&1; ")
                 append("echo -n 'SPUS0='; tinymix 'ABOX SPUS OUT0' 2>&1")
             },
+            // UNVERIFIED on hardware — no SIM service on the S10e here, so
+            // this could not be tested.  setPreferredDevice is a framework API
+            // rather than a Qualcomm one, and on SM6150 it was what finally
+            // moved playback into the modem uplink after every mixer-level
+            // attempt had failed.  The S10e never got injection working at all,
+            // so it is worth trying.  routeToTelephonyTx() logs the available
+            // output devices and does nothing if TYPE_TELEPHONY is absent.
+            playbackToTelephonyTx = true,
             musicVolPercent = 40,  // v2.8.45@30%+2x=audible but quiet. Raise for clarity.
             captureGain = 10,      // VOICE_RECOGNITION captures very quietly (rawCapRMS~2)
             playbackGain = 2,      // 40%+2x = moderate, SIFS0 only = no feedback
