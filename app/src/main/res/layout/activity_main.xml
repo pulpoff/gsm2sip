@@ -18,6 +18,470 @@
             android:layout_height="0dp"
             android:layout_weight="1">
 
+            <!-- ── TAB 0: Home (default view) ── -->
+            <LinearLayout
+                android:id="@+id/tabHome"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone"
+                android:padding="14dp">
+
+                <!-- Header -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingBottom="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="GSM2SIP"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <TextView
+                        android:id="@+id/tvHomeStatusPill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="● Offline"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_secondary"
+                        android:background="@drawable/input_bg"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="5dp"
+                        android:layout_marginStart="10dp" />
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="1dp"
+                        android:layout_weight="1" />
+
+                    <ImageButton
+                        android:id="@+id/btnHomeMenu"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_gear"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Menu" />
+                </LinearLayout>
+
+                <!-- Link state: the two networks this gateway depends on.
+                     Both legs matter — a call needs the modem for GSM and WiFi
+                     for SIP/RTP — so both are shown together. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <TextView
+                        android:id="@+id/tvNetMobile"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="—"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:background="@drawable/input_bg"
+                        android:padding="8dp"
+                        android:layout_marginEnd="4dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+
+                    <TextView
+                        android:id="@+id/tvNetWifi"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="—"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:background="@drawable/input_bg"
+                        android:padding="8dp"
+                        android:layout_marginStart="4dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+                </LinearLayout>
+
+                <!-- Filter chips -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="16dp">
+
+                    <Button
+                        android:id="@+id/btnFilterAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:text="All"
+                        android:textSize="13sp"
+                        android:textAllCaps="false"
+                        android:textColor="#052E16"
+                        android:backgroundTint="#34D399"
+                        android:minWidth="76dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnFilterRecent"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:text="Recent"
+                        android:textSize="13sp"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_primary"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:minWidth="76dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnFilterMissed"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:text="Missed"
+                        android:textSize="13sp"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_primary"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:minWidth="76dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+                </LinearLayout>
+
+                <!-- Everything below the chips scrolls; the header and the
+                     filter chips stay put so they are reachable while reading
+                     a long call list. -->
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                    <!-- Active call -->
+                    <LinearLayout
+                        android:id="@+id/homeCallCard"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:background="@drawable/card_bg"
+                        android:padding="16dp"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="● ACTIVE CALL"
+                                android:textSize="13sp"
+                                android:textStyle="bold"
+                                android:textColor="#34D399" />
+
+                            <TextView
+                                android:id="@+id/tvHomeCallDirection"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="GSM → SIP"
+                                android:textSize="11sp"
+                                android:textColor="@color/text_secondary"
+                                android:background="@drawable/input_bg"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="4dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvHomeCallTimer"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="00:00"
+                            android:textSize="44sp"
+                            android:textStyle="bold"
+                            android:fontFamily="monospace"
+                            android:textColor="@color/text_primary"
+                            android:paddingTop="10dp" />
+
+                        <TextView
+                            android:id="@+id/tvHomeCallFrom"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="—"
+                            android:textSize="20sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_primary"
+                            android:paddingTop="6dp" />
+
+                        <TextView
+                            android:id="@+id/tvHomeCallTo"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textSize="14sp"
+                            android:textColor="#60A5FA"
+                            android:paddingTop="2dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:paddingTop="16dp">
+
+                            <Button
+                                android:id="@+id/btnHomeMute"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="Mute"
+                                android:textSize="13sp"
+                                android:textColor="@color/text_primary"
+                                android:backgroundTint="@color/btn_secondary"
+                                android:layout_marginEnd="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+
+                            <Button
+                                android:id="@+id/btnHomeSnoop"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="Snoop"
+                                android:textSize="13sp"
+                                android:textColor="@color/text_primary"
+                                android:backgroundTint="@color/btn_secondary"
+                                android:layout_marginHorizontal="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+
+                            <Button
+                                android:id="@+id/btnHomeEnd"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="End"
+                                android:textSize="13sp"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#B91C1C"
+                                android:layout_marginStart="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Recent calls -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:paddingTop="18dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="RECENT CALLS"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_secondary" />
+
+                        <TextView
+                            android:id="@+id/tvHomeTrafficDay"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Today"
+                            android:textSize="12sp"
+                            android:textColor="@color/text_secondary" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/homeTrafficList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+
+                    <TextView
+                        android:id="@+id/tvHomeTrafficEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="No calls yet"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_hint"
+                        android:paddingVertical="14dp" />
+                    </LinearLayout>
+                </ScrollView>
+
+            </LinearLayout>
+
+            <!-- ── Settings (full screen, replaces the old modal) ── -->
+            <LinearLayout
+                android:id="@+id/tabConfig"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:padding="14dp">
+
+                    <ImageButton
+                        android:id="@+id/btnConfigBack"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_arrow_back"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Back" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Settings"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:paddingStart="12dp" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingHorizontal="14dp"
+                        android:paddingBottom="20dp">
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Server" />
+                        <EditText android:id="@+id/etCfgServer" style="@style/CfgField"
+                            android:hint="callagent.pro" android:inputType="textUri" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Port" />
+                        <EditText android:id="@+id/etCfgPort" style="@style/CfgField"
+                            android:hint="5060" android:inputType="number" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Username" />
+                        <EditText android:id="@+id/etCfgUser" style="@style/CfgField"
+                            android:hint="extension" android:inputType="text" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Password" />
+                        <EditText android:id="@+id/etCfgPass" style="@style/CfgField"
+                            android:hint="password" android:inputType="textPassword" />
+
+                        <TextView style="@style/CfgLabel" android:text="Own Number (SIM)" />
+                        <EditText android:id="@+id/etCfgOwnNumber" style="@style/CfgField"
+                            android:hint="international, e.g. +4915215320372"
+                            android:inputType="phone" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Sent as the SIP destination so the server can map the call to an assistant. Without it the gateway addresses its own extension and the call loops back."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Audio Codec" />
+
+                        <RadioGroup
+                            android:id="@+id/rgCfgCodec"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="4dp">
+
+                            <RadioButton
+                                android:id="@+id/rbCodecG722"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.722 only — wideband 16 kHz (recommended)"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbCodecBoth"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.722 preferred, G.711 allowed"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbCodecG711"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.711 only — narrowband 8 kHz"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+                        </RadioGroup>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Offering G.711 alongside G.722 usually means the server picks G.711 and every call is narrowband, which is why G.722 alone is the default."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgAutoconnect"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Autoconnect on startup"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="16dp" />
+
+                        <Button
+                            android:id="@+id/btnCfgSave"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:text="SAVE"
+                            android:textStyle="bold"
+                            android:textColor="@color/accent_on"
+                            android:backgroundTint="@color/accent"
+                            android:layout_marginTop="20dp"
+                            android:minHeight="0dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp" />
+                    </LinearLayout>
+                </ScrollView>
+            </LinearLayout>
+
             <!-- ── TAB 1: Dialer ── -->
             <LinearLayout
                 android:id="@+id/tabDialer"
@@ -329,6 +793,19 @@
                         android:text="LOG"
                         android:backgroundTint="@color/btn_secondary"
                         android:textColor="#FFFFFF"
+                        android:layout_marginHorizontal="3dp" />
+
+                    <!-- Listen in on a live call through the speaker.  Does not
+                         touch the microphone, which stays muted throughout. -->
+                    <Button
+                        android:id="@+id/btnSnoop"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="SNOOP"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false"
                         android:layout_marginStart="3dp" />
                 </LinearLayout>
 
@@ -355,97 +832,7 @@
 
         </FrameLayout>
 
-        <!-- ═══ Bottom tab bar ═══ -->
-        <LinearLayout
-            android:id="@+id/bottomTabBar"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:orientation="horizontal"
-            android:background="@color/surface"
-            android:elevation="8dp"
-            android:gravity="center_vertical">
-
-            <!-- Dialer tab -->
-            <LinearLayout
-                android:id="@+id/tabBtnDialer"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true">
-
-                <ImageView
-                    android:id="@+id/tabIconDialer"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:src="@drawable/ic_tab_dialer"
-                    android:tint="@color/primary" />
-                <TextView
-                    android:id="@+id/tabLabelDialer"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Dialer"
-                    android:textSize="11sp"
-                    android:textColor="@color/primary" />
-            </LinearLayout>
-
-            <!-- Calls tab -->
-            <LinearLayout
-                android:id="@+id/tabBtnCalls"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true">
-
-                <ImageView
-                    android:id="@+id/tabIconCalls"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:src="@drawable/ic_tab_calls"
-                    android:tint="@color/text_hint" />
-                <TextView
-                    android:id="@+id/tabLabelCalls"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Calls"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_hint" />
-            </LinearLayout>
-
-            <!-- Settings tab -->
-            <LinearLayout
-                android:id="@+id/tabBtnSettings"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:background="?attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true">
-
-                <ImageView
-                    android:id="@+id/tabIconSettings"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:src="@drawable/ic_tab_settings"
-                    android:tint="@color/text_hint" />
-                <TextView
-                    android:id="@+id/tabLabelSettings"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Settings"
-                    android:textSize="11sp"
-                    android:textColor="@color/text_hint" />
-            </LinearLayout>
-        </LinearLayout>
+<!-- Bottom tab bar removed: navigation is the header menu on the home view -->
     </LinearLayout>
 
     <!-- ═══ Full-screen in-call overlay (above everything, hidden by default) ═══ -->
@@ -501,6 +888,23 @@
             android:layout_width="0dp"
             android:layout_height="0dp"
             android:layout_weight="1" />
+
+        <!-- Listen in on both sides through the speaker.  Does not touch the
+             microphone, which stays muted for the whole call. -->
+        <Button
+            android:id="@+id/btnInCallMonitor"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginBottom="12dp"
+            android:text="LISTEN IN"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#2563EB"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
 
         <Button
             android:id="@+id/btnInCallEnd"

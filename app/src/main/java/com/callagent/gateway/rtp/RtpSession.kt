@@ -55,6 +55,24 @@ class RtpSession(
     /** 1 or 2, per [DeviceProfile.playbackStereo]. */
     private var playbackChannels = 1
 
+    // ── Monitor ("snoop") ────────────────────────────────────────────
+    // A second track on the phone's speaker carrying both sides of the call
+    // mixed together, for listening in without touching the bridge.  It cannot
+    // work by unmuting the call: the caller arrives on the modem downlink and
+    // the agent goes out to Telephony Tx, so neither passes through the
+    // speaker any more.  Both sides are therefore mixed here in software.
+    //
+    // The microphone stays muted throughout — this only ever plays audio out.
+    @Volatile private var monitorTrack: AudioTrack? = null
+    /** Most recent caller frame, 16-bit mono at [captureRate], for mixing. */
+    @Volatile private var lastCallerFrame: ByteArray? = null
+
+    /** Silence the agent towards the caller without disturbing the bridge.
+     *  RTP keeps flowing in both directions and the SIP call stays up; only the
+     *  audio written towards the modem is zeroed.  Intended for cutting the
+     *  agent off mid-sentence when it is saying something it should not. */
+    @Volatile private var agentMuted = false
+
     // Codec
     private val g722Encoder = G722Codec()
     private val g722Decoder = G722Codec()
@@ -410,8 +428,18 @@ class RtpSession(
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .build()
             )
-            .setBufferSizeInBytes(playBufSize)
             .setTransferMode(AudioTrack.MODE_STREAM)
+            .apply {
+                if (profile.playbackLowLatency) {
+                    // Deliberately no setBufferSizeInBytes here: asking for
+                    // low latency and then handing the framework a large
+                    // buffer is contradictory, and the request is silently
+                    // ignored.  Let it size the buffer itself.
+                    setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                } else {
+                    setBufferSizeInBytes(playBufSize)
+                }
+            }
             .build()
         audioTrack = track
 
@@ -424,8 +452,13 @@ class RtpSession(
         // For VOICE_DOWNLINK, AEC was over-canceling (capRMS dropped from 252 to ~5).
         // Echo cancellation is handled by Asterisk on the server side.
 
+        // Log what was actually granted, not what was asked for: the
+        // low-latency request can be refused silently.
+        val grantedFrames = try { track.bufferSizeInFrames } catch (_: Exception) { -1 }
+        val grantedMs = if (grantedFrames > 0) grantedFrames * 1000 / playbackRate else -1
         Log.i(TAG, "Audio init: playRate=$playbackRate playUsage=$playbackUsageName " +
-            "playBuf=$playBufSize(min=$minPlayBuf) ch=$playbackChannels " +
+            "playBuf=${grantedFrames}f/${grantedMs}ms (asked=$playBufSize min=$minPlayBuf " +
+            "lowLatency=${profile.playbackLowLatency}) ch=$playbackChannels " +
             "capture=${if (audioRecord != null) audioSourceName else "deferred"} profile=${profile.name}")
         return true
     }
@@ -646,6 +679,7 @@ class RtpSession(
         Log.i(TAG, "Stopping RTP session on port $localPort")
 
         setHalCallState(1)
+        setMonitorEnabled(false)
 
         audioRecord?.let {
             try { it.stop() } catch (_: Exception) {}
@@ -768,6 +802,7 @@ class RtpSession(
                 // (HAL/modem not providing audio).  If rawCaptureRms>0 but
                 // captureRms=0, the echo gate is suppressing.
                 rawCaptureRms = pcmRms(pcmBuf)
+                if (monitorTrack != null) lastCallerFrame = pcmBuf.copyOf()
 
                 // Silence detection: only count during non-echo periods (when
                 // decayingPlaybackRms <= echoGateThreshold).  incall_music echo
@@ -1100,6 +1135,96 @@ class RtpSession(
         }
     }
 
+    /** Mute or unmute the agent towards the caller. */
+    fun setAgentMuted(on: Boolean) {
+        agentMuted = on
+        Log.i(TAG, if (on) "Agent MUTED towards caller" else "Agent unmuted")
+        listener?.onRtpStats(if (on) "Agent muted" else "Agent unmuted")
+    }
+
+    /** Turn the speaker monitor on or off mid-call.  Safe to call repeatedly. */
+    fun setMonitorEnabled(on: Boolean) {
+        if (on) {
+            if (monitorTrack != null) return
+            try {
+                val minBuf = AudioTrack.getMinBufferSize(
+                    playbackRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+                )
+                val t = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(playbackRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+                // Force it to the loudspeaker; the call itself is elsewhere.
+                try {
+                    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                    am?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                        ?.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        ?.let { t.setPreferredDevice(it) }
+                } catch (_: Exception) {}
+                t.play()
+                monitorTrack = t
+                Log.i(TAG, "Monitor ON — both sides on the speaker, mic stays muted")
+                listener?.onRtpStats("Monitor ON")
+            } catch (e: Exception) {
+                Log.w(TAG, "Monitor start failed: ${e.message}")
+            }
+        } else {
+            monitorTrack?.let {
+                try { it.stop() } catch (_: Exception) {}
+                try { it.release() } catch (_: Exception) {}
+            }
+            monitorTrack = null
+            Log.i(TAG, "Monitor OFF")
+            listener?.onRtpStats("Monitor OFF")
+        }
+    }
+
+    /**
+     * Mix the agent's frame with the most recent caller frame and play the
+     * result on the speaker.
+     *
+     * Weighted 3:1 towards the agent rather than mixed evenly.  The caller
+     * arrives from the modem downlink at close to full scale while the agent's
+     * side is quieter, so an even mix buries the agent — and the agent is
+     * usually the half worth listening to, since the point of monitoring is to
+     * hear what it is saying.  The weights still sum to 1, so two loud sides
+     * cannot clip against each other.
+     */
+    private fun feedMonitor(agentPcm: ByteArray) {
+        val t = monitorTrack ?: return
+        try {
+            val caller = lastCallerFrame
+            val out = ByteArray(agentPcm.size)
+            var i = 0
+            while (i + 1 < agentPcm.size) {
+                val a = ((agentPcm[i + 1].toInt() shl 8) or (agentPcm[i].toInt() and 0xFF)).toShort().toInt()
+                val c = if (caller != null && i + 1 < caller.size) {
+                    ((caller[i + 1].toInt() shl 8) or (caller[i].toInt() and 0xFF)).toShort().toInt()
+                } else 0
+                val mixed = (((a * 3) + c) / 4).coerceIn(-32768, 32767)
+                out[i] = (mixed and 0xFF).toByte()
+                out[i + 1] = ((mixed shr 8) and 0xFF).toByte()
+                i += 2
+            }
+            t.write(out, 0, out.size)
+        } catch (e: Exception) {
+            Log.w(TAG, "Monitor write failed: ${e.message}")
+        }
+    }
+
     private fun playbackLoop() {
         val track = audioTrack ?: return
 
@@ -1196,7 +1321,14 @@ class RtpSession(
                     }
                 }
 
+                if (agentMuted) {
+                    // Zero before both the modem and the monitor, so someone
+                    // listening in hears the mute take effect rather than
+                    // audio the caller is no longer getting.
+                    java.util.Arrays.fill(pcm, 0)
+                }
                 playbackRms = if (playbackGain > 1) pcmRms(pcm) else rawRms
+                feedMonitor(pcm)
                 val out = if (playbackChannels == 2) monoToStereo(pcm) else pcm
                 track.write(out, 0, out.size)
                 playbackFrames++

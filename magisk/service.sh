@@ -51,8 +51,6 @@ for PERM in \
     android.permission.READ_CALL_LOG \
     android.permission.CALL_PHONE \
     android.permission.ANSWER_PHONE_CALLS \
-    android.permission.ACCESS_FINE_LOCATION \
-    android.permission.ACCESS_COARSE_LOCATION \
     android.permission.POST_NOTIFICATIONS \
 ; do
     pm grant "$PKG" "$PERM" 2>/dev/null && \

@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Brand -->
+    <!-- The teal green used by the logo, the online pill, the filter chips
+         and the settings controls.  One value so they cannot drift apart. -->
+    <color name="accent">#34D399</color>
+    <color name="accent_on">#052E16</color>
+
     <color name="primary">#2563EB</color>
     <color name="primary_dark">#1D4ED8</color>
 

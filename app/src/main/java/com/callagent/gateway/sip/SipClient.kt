@@ -307,6 +307,23 @@ class SipClient(
         }
     }
 
+    /**
+     * Register now, ignoring the backoff cooldown.  For an explicit retry from
+     * the UI, where waiting out an exponential delay is not what was asked for.
+     */
+    fun retryNow() {
+        RegisterBackoff.reset()
+        registerFailures = 0
+        Thread({
+            try {
+                uiLog("Manual retry requested")
+                register()
+            } catch (e: Exception) {
+                uiLog("Manual retry failed: ${e.message}")
+            }
+        }, "SIP-ManualRetry").start()
+    }
+
     private fun sendRegister(auth: String? = null) {
         val msg = SipBuilder.register(
             username, serverDomain, serverPort,
@@ -494,28 +511,36 @@ class SipClient(
                         onConnectionLost?.invoke()
                     }
                 } else {
-                    // Send OPTIONS keepalive regardless of active calls
-                    // to prevent NAT binding expiration on the SIP port
-                    sendOptions()
-                    Thread.sleep(5_000)
-                    // Check if we got any response from the server recently
-                    if (registered && System.currentTimeMillis() - lastServerResponseTime > 60_000) {
-                        keepaliveFailures++
-                        if (keepaliveFailures >= MAX_KEEPALIVE_FAILURES) {
-                            uiLog("Keepalive failed $keepaliveFailures times, connection lost")
-                            registered = false
-                            onConnectionLost?.invoke()
-                            continue
+                    // Keeping the NAT binding open needs a packet every 20-30s,
+                    // but it does not need to be a SIP transaction: a bare CRLF
+                    // refreshes the mapping and the server neither answers it
+                    // nor logs it.
+                    sendNatKeepalive()
+
+                    // The registration refresh is the only SIP request this
+                    // gateway makes while idle.  It is authenticated, it is
+                    // exactly what a registrar expects, and it doubles as the
+                    // liveness check — so there is nothing left for OPTIONS to
+                    // do.  Polling with OPTIONS every 15s meant 240
+                    // unauthenticated requests an hour, each answered 401 and
+                    // recorded as an auth failure, which is the pattern
+                    // fail2ban counts; it banned this gateway's IP repeatedly.
+                    if (System.currentTimeMillis() - lastRegisterTime > REREGISTER_INTERVAL_MS) {
+                        uiLog("Refreshing registration")
+                        registered = false
+                        if (!register()) {
+                            // Failed refresh means the server or the path is
+                            // gone; the retry loop above takes over from here.
+                            keepaliveFailures++
+                            if (keepaliveFailures >= MAX_KEEPALIVE_FAILURES) {
+                                uiLog("Registration refresh failed $keepaliveFailures times")
+                                keepaliveFailures = 0
+                                onConnectionLost?.invoke()
+                            }
+                        } else {
+                            keepaliveFailures = 0
                         }
-                    } else {
-                        keepaliveFailures = 0
                     }
-                }
-                // Re-register every 50 minutes
-                if (registered && System.currentTimeMillis() - lastRegisterTime > 50 * 60 * 1000) {
-                    uiLog("Periodic re-registration")
-                    registered = false
-                    register()
                 }
             } catch (e: Exception) {
                 uiLog("Monitor error: ${e.message}")
@@ -525,22 +550,21 @@ class SipClient(
         }
     }
 
-    private fun sendOptions() {
-        val branch = "z9hG4bK${(100000..999999).random()}"
-        val msg = buildString {
-            append("OPTIONS sip:$serverDomain:$serverPort SIP/2.0\r\n")
-            append("Via: SIP/2.0/UDP $publicIp:$localPort;branch=$branch;rport\r\n")
-            append("Max-Forwards: 70\r\n")
-            append("User-Agent: ${SipBuilder.userAgent}\r\n")
-            append("To: <sip:$username@$serverDomain>\r\n")
-            append("From: <sip:$username@$publicIp>;tag=49583\r\n")
-            append("Call-ID: $callIdBase\r\n")
-            append("CSeq: ${cseq.getAndIncrement()} OPTIONS\r\n")
-            append("Contact: <sip:$username@$publicIp:$localPort>\r\n")
-            append("Content-Length: 0\r\n\r\n")
+    /**
+     * Refresh the NAT binding without generating a SIP transaction.
+     *
+     * A bare CRLF is the standard SIP keepalive (RFC 5626 §3.5.1).  It costs
+     * the server nothing, is not a request, and cannot be counted as a failed
+     * authentication — unlike the OPTIONS this replaces.
+     */
+    private fun sendNatKeepalive() {
+        try {
+            sendTo("\r\n\r\n", serverAddress)
+        } catch (e: Exception) {
+            Log.w(TAG, "NAT keepalive failed: ${e.message}")
         }
-        sendTo(msg, serverAddress)
     }
+
 
     companion object {
         private const val TAG = "SipClient"
@@ -550,6 +574,11 @@ class SipClient(
 
         /** Consecutive failures before asking GatewayService for a new socket. */
         private const val MAX_REGISTER_FAILURES = 3
+
+        /** How often to refresh the registration.  Ten minutes is six
+         *  authenticated requests an hour — ordinary registrar traffic, and
+         *  the only SIP the gateway sends while idle. */
+        private const val REREGISTER_INTERVAL_MS = 10 * 60 * 1000L
 
         /**
          * Exponential backoff for REGISTER, shared by every SipClient.
@@ -566,7 +595,16 @@ class SipClient(
          */
         private object RegisterBackoff {
             private const val MIN_MS = 15_000L
-            private const val MAX_MS = 30 * 60 * 1000L
+
+            /** Ceiling on the retry interval.
+             *
+             *  Half an hour was too cautious in the other direction: a gateway
+             *  that loses its registration would sit unreachable for up to
+             *  30 minutes, and someone has to notice and re-register by hand.
+             *  Five minutes recovers on its own within a few attempts while
+             *  still being about a dozen REGISTERs an hour at worst, which is
+             *  well under anything that looks like abuse. */
+            private const val MAX_MS = 5 * 60 * 1000L
 
             private var target = ""
             private var delayMs = MIN_MS
@@ -581,6 +619,14 @@ class SipClient(
                     nextAttemptAt = 0L
                 }
                 return (nextAttemptAt - System.currentTimeMillis()).coerceAtLeast(0L)
+            }
+
+            /** Clear the cooldown for a deliberate, user-initiated retry.
+             *  Backing off exists to stop the gateway hammering a server on
+             *  its own; someone pressing "retry" is not that. */
+            @Synchronized fun reset() {
+                delayMs = MIN_MS
+                nextAttemptAt = 0L
             }
 
             @Synchronized fun onSuccess() {

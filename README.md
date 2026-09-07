@@ -1,6 +1,12 @@
-# SIP-GSM Gateway
+<p align="center">
+  <img src="icon.png" width="128" alt="gsm2sip">
+</p>
 
+<h1 align="center">gsm2sip</h1>
+
+<p align="center">
 Android app that bridges GSM calls (local SIM) with the callagent.pro SIP/Asterisk server.
+</p>
 
 | Dialer | SIP Registration |
 |--------|-----------------|

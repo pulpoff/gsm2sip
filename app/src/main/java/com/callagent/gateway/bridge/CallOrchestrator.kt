@@ -171,6 +171,30 @@ class CallOrchestrator(
         null
     }
 
+    /** Cut the agent's audio to the caller, leaving the call itself up. */
+    fun setAgentMuted(on: Boolean) {
+        val session = activeRtpSession
+        if (session == null) {
+            listener?.onError("No active call to mute")
+            return
+        }
+        session.setAgentMuted(on)
+    }
+
+    /** Listen in on the active call through the phone's speaker.
+     *
+     *  Plays both sides mixed; the microphone stays muted, so nothing the room
+     *  says reaches either the caller or the agent. */
+    fun setMonitorEnabled(on: Boolean) {
+        val session = activeRtpSession
+        if (session == null) {
+            Log.w(TAG, "Monitor requested with no active call")
+            listener?.onError("No active call to monitor")
+            return
+        }
+        session.setMonitorEnabled(on)
+    }
+
     /** Initiate an outgoing GSM call from the dialler, then bridge to SIP */
     fun initiateDiallerCall(number: String) {
         // MMI/USSD is not a call — it never produces a Telecom Connection, so

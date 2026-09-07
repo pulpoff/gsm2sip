@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.graphics.drawable.Icon
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -63,6 +64,20 @@ class GatewayService : Service() {
 
     /** Prevents concurrent startGateway / reconnect threads */
     private val initializing = AtomicBoolean(false)
+
+    /** When [initializing] was last set, so a stuck flag can be detected.
+     *
+     *  If the init thread dies or hangs, this flag stays true forever, and then
+     *  nothing can ever bring the gateway back: reconnect()'s compareAndSet
+     *  always fails and startGateway()'s guard always skips.  The gateway sits
+     *  silent — no REGISTER at all — until someone restarts the app by hand. */
+    @Volatile private var initializingSince = 0L
+
+    /** Whether the speaker monitor is on, for the notification's action label. */
+    @Volatile private var monitorOn = false
+
+    /** Whether the agent is muted towards the caller. */
+    @Volatile private var agentMuted = false
 
     // ── Network change detection ────────────────────────
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -136,10 +151,12 @@ class GatewayService : Service() {
 
     private fun reconnect() {
         if (stopped || cfgServer.isEmpty()) return
+        clearStaleInitializing()
         if (!initializing.compareAndSet(false, true)) {
             Log.i(TAG, "Reconnect skipped — already initializing")
             return
         }
+        initializingSince = System.currentTimeMillis()
         onlineSince = 0L
         broadcastLog("Reconnecting...")
         broadcastStatus("STARTING", "Reconnecting...")
@@ -170,12 +187,66 @@ class GatewayService : Service() {
         Log.i(TAG, "GatewayService created")
     }
 
+    /** Release the init flag if it has been held implausibly long. */
+    private fun clearStaleInitializing() {
+        if (initializing.get() &&
+            System.currentTimeMillis() - initializingSince > INIT_STALE_MS
+        ) {
+            val heldFor = (System.currentTimeMillis() - initializingSince) / 1000
+            Log.w(TAG, "init flag held ${heldFor}s — treating as stale and clearing")
+            broadcastLog("Recovering from stuck initialisation (${heldFor}s)")
+            initializing.set(false)
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        clearStaleInitializing()
         when (intent?.action) {
             ACTION_START -> startGateway(intent)
             ACTION_STOP -> stopGateway()
             ACTION_RELOAD_STATS -> reloadStats()
+            ACTION_STATUS -> broadcastCurrentStatus()
+            ACTION_RECONNECT -> {
+                // Tapping the offline pill should act immediately.  If there is
+                // a client, ask it to register now; if there is not, the
+                // gateway is down and needs bringing up.
+                val sip = sipClient
+                broadcastStatus("STARTING", "Retrying…")
+                if (sip != null && !stopped) {
+                    sip.retryNow()
+                } else {
+                    // No client — a previous reconnect nulled it and never
+                    // finished.  Force a fresh one rather than letting the
+                    // init guard swallow the request.
+                    initializing.set(false)
+                    stopped = false
+                    reconnect()
+                }
+            }
             ACTION_DIAL -> dialFromDialler(intent)
+            ACTION_MUTE_AGENT -> {
+                agentMuted = if (intent.hasExtra(EXTRA_MUTE_ON)) {
+                    intent.getBooleanExtra(EXTRA_MUTE_ON, false)
+                } else {
+                    !agentMuted
+                }
+                orchestrator?.setAgentMuted(agentMuted)
+                broadcastStatus(
+                    orchestrator?.bridgeState?.name ?: "IDLE",
+                    if (agentMuted) "Agent muted" else "Agent unmuted"
+                )
+            }
+            ACTION_MONITOR -> {
+                // No extra means "toggle", which is what the notification
+                // action sends; the in-call screen passes an explicit value.
+                monitorOn = if (intent.hasExtra(EXTRA_MONITOR_ON)) {
+                    intent.getBooleanExtra(EXTRA_MONITOR_ON, false)
+                } else {
+                    !monitorOn
+                }
+                orchestrator?.setMonitorEnabled(monitorOn)
+                updateNotification(NotifState.OK)
+            }
             else -> startGateway(intent)
         }
         return START_STICKY
@@ -185,6 +256,26 @@ class GatewayService : Service() {
         val number = intent?.getStringExtra(EXTRA_NUMBER) ?: return
         orchestrator?.initiateDiallerCall(number)
             ?: broadcastLog("ERROR: Gateway not running — cannot bridge to SIP")
+    }
+
+    /**
+     * Re-broadcast the current state.
+     *
+     * The UI is only ever told about state *changes*, so an Activity that
+     * starts while the service is already running never hears anything and
+     * shows its default "offline" until the next call.  This gives it a way
+     * to ask.
+     */
+    private fun broadcastCurrentStatus() {
+        val state = orchestrator?.bridgeState ?: CallOrchestrator.BridgeState.IDLE
+        val registered = sipClient?.registered == true
+        val info = when {
+            stopped -> "Stopped"
+            state == CallOrchestrator.BridgeState.IDLE && registered -> "SIP registered"
+            state == CallOrchestrator.BridgeState.IDLE -> "Connecting"
+            else -> state.name
+        }
+        broadcastStatus(if (stopped) "STOPPED" else state.name, info)
     }
 
     private fun reloadStats() {
@@ -261,6 +352,11 @@ class GatewayService : Service() {
             .putString("pass", password)
             .apply()
 
+        // Codec preference is a property of the SDP we build, so it has to be
+        // in place before the first INVITE goes out.
+        com.callagent.gateway.sip.SipBuilder.codecMode =
+            prefs.getString("codec", "g722") ?: "g722"
+
         cfgServer = server
         cfgPort = port
         cfgUser = username
@@ -282,6 +378,7 @@ class GatewayService : Service() {
         }
         acquireLocks()
         initializing.set(true)
+        initializingSince = System.currentTimeMillis()
 
         // Run network I/O off the main thread (Android blocks sockets on main thread)
         thread(name = "gateway-init") {
@@ -476,12 +573,31 @@ class GatewayService : Service() {
             NotifState.WARN -> R.drawable.ic_notif_warning
             NotifState.ERROR -> R.drawable.ic_notif_cross
         }
+        // Listen-in toggle.  It lives on the notification rather than on the
+        // in-call screen because during a real gateway call there is no visible
+        // Activity at all — the service runs headless, and Android 15+ refuses
+        // to let it launch one from the background (BAL_BLOCK).  The
+        // notification is the only UI reachable at that moment.
+        val monitorIntent = Intent(this, GatewayService::class.java).apply {
+            action = ACTION_MONITOR
+        }
+        val monitorPi = PendingIntent.getService(
+            this, 1, monitorIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val monitorAction = Notification.Action.Builder(
+            Icon.createWithResource(this, R.drawable.ic_phone_call),
+            if (monitorOn) "Stop listening" else "Listen in",
+            monitorPi
+        ).build()
+
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(statusText)
             .setSmallIcon(icon)
             .setContentIntent(pi)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(monitorAction)
             .build()
             .apply { flags = flags or Notification.FLAG_NO_CLEAR }
     }
@@ -667,12 +783,22 @@ class GatewayService : Service() {
             copy
         }
 
+        /** Longest plausible time to bring a SIP client up; past this the
+         *  init flag is assumed stuck rather than genuinely in progress. */
+        private const val INIT_STALE_MS = 90_000L
+
         const val CHANNEL_ID = "gateway_channel"
         const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.callagent.gateway.START"
         const val ACTION_STOP = "com.callagent.gateway.STOP"
         const val ACTION_RELOAD_STATS = "com.callagent.gateway.RELOAD_STATS"
+        const val ACTION_STATUS = "com.callagent.gateway.STATUS_REQUEST"
+        const val ACTION_RECONNECT = "com.callagent.gateway.RECONNECT"
         const val ACTION_DIAL = "com.callagent.gateway.DIAL"
+        const val ACTION_MONITOR = "com.callagent.gateway.MONITOR"
+        const val EXTRA_MONITOR_ON = "monitor_on"
+        const val ACTION_MUTE_AGENT = "com.callagent.gateway.MUTE_AGENT"
+        const val EXTRA_MUTE_ON = "mute_on"
         const val EXTRA_SERVER = "server"
         const val EXTRA_PORT = "port"
         const val EXTRA_USER = "user"

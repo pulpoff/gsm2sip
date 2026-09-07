@@ -193,6 +193,22 @@ data class DeviceProfile(
      *  both channels on the way out. */
     val playbackStereo: Boolean = false,
 
+    /** Request PERFORMANCE_MODE_LOW_LATENCY for the playback track.
+     *
+     *  Worth roughly 60ms: AudioTrack's ordinary minimum for 16 kHz stereo is
+     *  about 80ms, and the low-latency path is a fraction of that.
+     *
+     *  Historically this was the thing NOT to do — low-latency made the HAL
+     *  serve the track from low-latency-playback on MultiMedia5, a front-end
+     *  wired to the speaker rather than to the modem, so the caller heard
+     *  nothing from the agent.  That is why the code carries a warning against
+     *  it.  Since routing is now requested explicitly through
+     *  setPreferredDevice(TYPE_TELEPHONY) rather than inferred from the buffer
+     *  size, the usecase may no longer follow the performance mode — but that
+     *  has to be confirmed on the device, by checking that playback still
+     *  reports routedTo=18 and the caller still hears the agent. */
+    val playbackLowLatency: Boolean = false,
+
     /** Playback buffer size in milliseconds, or 0 for AudioTrack's minimum.
      *
      *  This decides which HAL output the track lands on, and therefore whether
@@ -807,6 +823,7 @@ data class DeviceProfile(
             incallMusicBeforeTrack = true,
             // The incall_music_uplink mixPort accepts stereo only.
             playbackStereo = true,
+            playbackLowLatency = true,
             // No override: routing is decided by setPreferredDevice(TELEPHONY)
             // rather than by buffer size now, so the deep-buffer trick that
             // forced the track off MultiMedia5 is no longer load-bearing, and

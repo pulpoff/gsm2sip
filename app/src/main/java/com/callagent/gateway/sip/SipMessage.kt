@@ -128,15 +128,17 @@ class SipMessage private constructor(
             for (i in 3 until parts.size) {
                 parts[i].trim().toIntOrNull()?.let { offered.add(it) }
             }
-            // G.722 first: it is wideband and the reason audio sounded
-            // narrow and harsh was that PCMA won here on every call.
-            // The G.711 entries remain only so a server that genuinely does
-            // not offer G.722 still gets a working call rather than silence.
-            return when {
-                9 in offered -> 9   // G.722 (wideband, 16 kHz sampling)
+            // Follow the configured preference, but never fail a call over it:
+            // if the remote offers nothing we prefer, take what it does offer
+            // rather than answering with a codec it cannot speak.
+            val g711 = when {
                 8 in offered -> 8   // PCMA (G.711 A-law, 8 kHz)
                 0 in offered -> 0   // PCMU (G.711 mu-law, 8 kHz)
-                else -> 9
+                else -> null
+            }
+            return when (SipBuilder.codecMode) {
+                "g711" -> g711 ?: if (9 in offered) 9 else 8
+                else -> if (9 in offered) 9 else (g711 ?: 9)
             }
         }
 
@@ -208,6 +210,14 @@ object SipBuilder {
      */
     @Volatile
     var userAgent: String = "gsm2sip"
+
+    /** Which codecs to offer and accept: "g722", "g711" or "both".
+     *
+     *  G.722 alone is the default and the reason audio is wideband: when G.711
+     *  is offered alongside it, servers routinely pick PCMA and every call ends
+     *  up narrowband regardless of what both ends support. */
+    @Volatile
+    var codecMode: String = "g722"
 
     private fun branch(): String = "z9hG4bK${(100000000..999999999).random()}"
     private fun tag(): String = "gw${(100000000..999999999).random()}"
@@ -385,18 +395,25 @@ object SipBuilder {
         }
 
     private fun buildSdp(localIp: String, rtpPort: Int): String = buildString {
-        // G.722 only.  Offering PCMA alongside it meant the server always
-        // picked PCMA — narrowband 8 kHz — since it was listed first.
         // G.722 is wideband (16 kHz sampling) but its SDP clock rate is
-        // written as 8000 per RFC 3551, which is a historical quirk, not a typo.
-        // telephone-event is kept: it carries DTMF, not voice.
+        // written as 8000 per RFC 3551 — a historical quirk, not a typo.
+        // telephone-event is always offered: it carries DTMF, not voice.
+        val payloads = when (codecMode) {
+            "g711" -> "8 0 101"
+            "both" -> "9 8 0 101"
+            else -> "9 101"
+        }
         append("v=0\r\n")
         append("o=gateway 0 0 IN IP4 $localIp\r\n")
         append("s=SIP Call\r\n")
         append("c=IN IP4 $localIp\r\n")
         append("t=0 0\r\n")
-        append("m=audio $rtpPort RTP/AVP 9 101\r\n")
-        append("a=rtpmap:9 G722/8000\r\n")
+        append("m=audio $rtpPort RTP/AVP $payloads\r\n")
+        if (codecMode != "g711") append("a=rtpmap:9 G722/8000\r\n")
+        if (codecMode != "g722") {
+            append("a=rtpmap:8 PCMA/8000\r\n")
+            append("a=rtpmap:0 PCMU/8000\r\n")
+        }
         append("a=rtpmap:101 telephone-event/8000\r\n")
         append("a=fmtp:101 0-16\r\n")
         append("a=ptime:20\r\n")
