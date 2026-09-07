@@ -681,7 +681,7 @@ class MainActivity : AppCompatActivity() {
                 // concerned: dumpsys blanks it even for root, so the only way
                 // to read it is getAllCellInfo() with ACCESS_FINE_LOCATION.
                 // The Magisk module grants that on boot, so no prompt appears.
-                append("\n— cells —\n" + describeCells())
+                append("\n" + describeCells())
             } else {
                 val extra = RootShell.execForOutput(
                     "echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null); " +
@@ -803,33 +803,64 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun describeCell(info: android.telephony.CellInfo): String {
-        val tag = if (info.isRegistered) "serving" else "neighbour"
-        fun v(x: Int) = if (x == Int.MAX_VALUE) "—" else x.toString()
-        return when (info) {
+    /**
+     * One cell as aligned `name : value` lines, matching the rest of the
+     * dialog.  Int.MAX_VALUE is the API's "unknown", not a real reading, so it
+     * is shown as a dash rather than a nine-digit number.
+     */
+    private fun describeCell(info: android.telephony.CellInfo): String = buildString {
+        fun row(name: String, value: String) = appendLine(name.padEnd(13) + ": " + value)
+        fun num(x: Int) = if (x == Int.MAX_VALUE) "—" else x.toString()
+        fun sig(s: android.telephony.CellSignalStrength) = "${s.dbm} dBm (${s.level}/4)"
+
+        val role = if (info.isRegistered) "serving cell" else "neighbour"
+        when (info) {
             is android.telephony.CellInfoLte -> {
                 val id = info.cellIdentity
-                "LTE $tag  ci=${v(id.ci)} pci=${v(id.pci)} tac=${v(id.tac)} " +
-                    "earfcn=${v(id.earfcn)} ${id.mccString ?: "—"}/${id.mncString ?: "—"} " +
-                    "${info.cellSignalStrength.dbm}dBm"
+                row("Type", "LTE ($role)")
+                row("Cell ID", num(id.ci))
+                row("PCI", num(id.pci))
+                row("TAC", num(id.tac))
+                row("EARFCN", num(id.earfcn))
+                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                id.operatorAlphaLong?.toString()?.takeIf { it.isNotBlank() }
+                    ?.let { row("Carrier", it) }
+                row("Signal", sig(info.cellSignalStrength))
             }
             is android.telephony.CellInfoNr -> {
                 val id = info.cellIdentity as? android.telephony.CellIdentityNr
-                "5G $tag  nci=${id?.nci ?: "—"} pci=${v(id?.pci ?: Int.MAX_VALUE)} " +
-                    "tac=${v(id?.tac ?: Int.MAX_VALUE)} ${id?.mccString ?: "—"}/${id?.mncString ?: "—"} " +
-                    "${info.cellSignalStrength.dbm}dBm"
+                row("Type", "5G NR ($role)")
+                row("NCI", id?.nci?.toString() ?: "—")
+                row("PCI", num(id?.pci ?: Int.MAX_VALUE))
+                row("TAC", num(id?.tac ?: Int.MAX_VALUE))
+                row("NRARFCN", num(id?.nrarfcn ?: Int.MAX_VALUE))
+                row("MCC/MNC", "${id?.mccString ?: "—"}/${id?.mncString ?: "—"}")
+                row("Signal", sig(info.cellSignalStrength))
             }
             is android.telephony.CellInfoWcdma -> {
                 val id = info.cellIdentity
-                "WCDMA $tag  cid=${v(id.cid)} lac=${v(id.lac)} psc=${v(id.psc)} " +
-                    "${id.mccString ?: "—"}/${id.mncString ?: "—"} ${info.cellSignalStrength.dbm}dBm"
+                row("Type", "WCDMA ($role)")
+                row("Cell ID", num(id.cid))
+                row("LAC", num(id.lac))
+                row("PSC", num(id.psc))
+                row("UARFCN", num(id.uarfcn))
+                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                row("Signal", sig(info.cellSignalStrength))
             }
             is android.telephony.CellInfoGsm -> {
                 val id = info.cellIdentity
-                "GSM $tag  cid=${v(id.cid)} lac=${v(id.lac)} arfcn=${v(id.arfcn)} " +
-                    "${id.mccString ?: "—"}/${id.mncString ?: "—"} ${info.cellSignalStrength.dbm}dBm"
+                row("Type", "GSM ($role)")
+                row("Cell ID", num(id.cid))
+                row("LAC", num(id.lac))
+                row("ARFCN", num(id.arfcn))
+                row("BSIC", num(id.bsic))
+                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                row("Signal", sig(info.cellSignalStrength))
             }
-            else -> "${info.javaClass.simpleName.removePrefix("CellInfo")} $tag"
+            else -> {
+                row("Type", "${info.javaClass.simpleName.removePrefix("CellInfo")} ($role)")
+                row("Signal", sig(info.cellSignalStrength))
+            }
         }
     }
 
