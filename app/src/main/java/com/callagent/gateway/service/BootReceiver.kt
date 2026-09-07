@@ -38,54 +38,14 @@ class BootReceiver : BroadcastReceiver() {
             val user = prefs.getString("user", "") ?: ""
 
             if (server.isNotEmpty() && user.isNotEmpty()) {
-                Log.i(TAG, "Config found, starting gateway")
+                Log.i(TAG, "Config found, starting gateway service")
                 val port = prefs.getInt("port", 5060)
                 val pass = prefs.getString("pass", "") ?: ""
-                startViaActivity(context, server, port, user, pass)
+                GatewayService.start(context, server, port, user, pass)
             } else {
                 Log.i(TAG, "No config, skipping auto-start")
             }
         }
-    }
-
-    /**
-     * Bring the UI up first, and let it start the gateway service.
-     *
-     * Android 12+ withholds PROCESS_CAPABILITY_FOREGROUND_MICROPHONE from a
-     * foreground service that was started while the app was in the background
-     * — which is exactly what a BOOT_COMPLETED receiver is.  Nothing fails
-     * loudly: the service starts, AudioRecord starts, and AudioPolicy quietly
-     * feeds it zeros, so every capture source reads rawCapRMS=0 and the agent
-     * hears silence.  ("rec update ... silenced" in dumpsys audio.)
-     *
-     * Starting the Activity first means GatewayService is created while the
-     * app is TOP, which is the state that grants the capability; the service
-     * keeps it for its lifetime, so the UI can be dismissed afterwards.
-     *
-     * The launch goes through root because a background activity start from a
-     * receiver is itself refused on Android 15+ (BAL_BLOCK).  Without root we
-     * fall back to starting the service directly — the gateway will register
-     * and bridge, but capture will be silent until the app is opened by hand.
-     */
-    private fun startViaActivity(
-        context: Context, server: String, port: Int, user: String, pass: String
-    ) {
-        Thread({
-            val launched = try {
-                RootShell.exec(
-                    "am start -n ${context.packageName}/.MainActivity", timeoutMs = 10_000
-                ) == 0
-            } catch (e: Exception) {
-                Log.w(TAG, "Root activity launch failed: ${e.message}")
-                false
-            }
-            if (launched) {
-                Log.i(TAG, "MainActivity launched via root — it will start the service")
-            } else {
-                Log.w(TAG, "Could not launch UI; starting service directly (capture will be silenced)")
-                GatewayService.start(context, server, port, user, pass)
-            }
-        }, "boot-launch").start()
     }
 
     /**

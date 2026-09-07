@@ -1,18 +1,12 @@
 package com.callagent.gateway.gsm
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
-import android.telecom.TelecomManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import com.callagent.gateway.DeviceProfile
 import com.callagent.gateway.RootShell
@@ -165,99 +159,11 @@ object GsmCallManager {
     }
 
     /** Place outgoing GSM call via the SIM */
-    /**
-     * Place an outgoing GSM call.
-     *
-     * Uses TelecomManager.placeCall rather than startActivity(ACTION_CALL).
-     * The gateway dials from a foreground service with no visible Activity,
-     * and Android 15+ blocks background activity launches, so the intent form
-     * never reaches Telecom at all — it is dropped with BAL_BLOCK and the call
-     * simply never happens.  placeCall is a binder call into Telecom, needs no
-     * Activity, and we hold CALL_PHONE (plus CALL_PRIVILEGED as a priv-app);
-     * as the default dialer, Telecom hands the call back to our InCallService.
-     *
-     * The ACTION_CALL path is kept as a fallback for the case where Telecom
-     * refuses the direct call — it still works whenever an Activity is up.
-     */
-    /**
-     * True for dial strings that are MMI/USSD codes rather than phone numbers
-     * — anything containing '*' or '#', e.g. *132# (balance) or *#06# (IMEI).
-     *
-     * These must never reach placeCall: Telecom rejects them with
-     * "Connection is null, DIALED_MMI", and on this build that took
-     * TelephonyConnectionService down with it.
-     */
-    fun isMmiCode(dialString: String): Boolean {
-        val s = dialString.trim()
-        return s.isNotEmpty() && (s.contains('*') || s.contains('#'))
-    }
-
-    /**
-     * Run an MMI/USSD code and report the network's answer via [onResult].
-     *
-     * USSD codes (those ending in '#') go through sendUssdRequest, which hands
-     * the reply back to us so it can be logged — useful on a headless gateway
-     * where nobody is watching for a system dialog.  Anything else (IMEI
-     * lookups, call-forwarding shortcuts) goes to Telecom's own MMI handling.
-     */
-    @SuppressLint("MissingPermission")
-    fun sendMmi(context: Context, dialString: String, onResult: (String) -> Unit) {
-        val code = dialString.trim()
-        if (code.endsWith("#")) {
-            try {
-                val telephony =
-                    context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-                telephony.sendUssdRequest(
-                    code,
-                    object : TelephonyManager.UssdResponseCallback() {
-                        override fun onReceiveUssdResponse(
-                            tm: TelephonyManager, request: String, response: CharSequence
-                        ) {
-                            Log.i(TAG, "USSD $request → $response")
-                            onResult(response.toString())
-                        }
-
-                        override fun onReceiveUssdResponseFailed(
-                            tm: TelephonyManager, request: String, failureCode: Int
-                        ) {
-                            Log.w(TAG, "USSD $request failed (code $failureCode)")
-                            onResult("USSD $request failed (code $failureCode)")
-                        }
-                    },
-                    Handler(Looper.getMainLooper())
-                )
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "sendUssdRequest failed (${e.message}) — falling back to Telecom")
-            }
-        }
-        try {
-            val telecom = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            val handled = telecom.handleMmi(code)
-            onResult(if (handled) "MMI $code sent" else "MMI $code not recognised")
-        } catch (e: Exception) {
-            onResult("MMI $code failed: ${e.message}")
-        }
-    }
-
-    @SuppressLint("MissingPermission")
     fun makeCall(context: Context, destination: String) {
         Log.i(TAG, "Making GSM call to $destination")
-        val uri = Uri.fromParts("tel", destination, null)
-        try {
-            val telecom = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            telecom.placeCall(uri, Bundle())
-            return
-        } catch (e: Exception) {
-            Log.w(TAG, "placeCall failed (${e.message}) — falling back to ACTION_CALL")
-        }
-        try {
-            context.startActivity(
-                Intent(Intent.ACTION_CALL, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "ACTION_CALL fallback failed: ${e.message}")
-        }
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$destination"))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
     }
 
     /** Music volume percent — from device profile. */
@@ -271,7 +177,7 @@ object GsmCallManager {
         discoveryDone = true
         Thread({
             try {
-                val discovery = DeviceProfile.discoverMixerControls(profile)
+                val discovery = DeviceProfile.discoverMixerControls()
                 for (line in discovery.lines()) {
                     if (line.isNotBlank()) Log.i(TAG, "MixerDiscovery: $line")
                 }
@@ -291,7 +197,7 @@ object GsmCallManager {
     /** Configure audio for GSM↔SIP bridge using the active device profile. */
     private fun configureAudioBridge() {
         try {
-            // Run ALSA mixer discovery on first call for diagnostics
+            // Run ABOX/ALSA discovery on first call for diagnostics
             runMixerDiscovery()
 
             inCallService?.let { service ->
@@ -434,22 +340,32 @@ object GsmCallManager {
             return
         }
         try {
-            // Readback before/after so a setup that silently did nothing is
-            // visible in the call log.  Which controls matter is SoC-specific,
-            // so the profile supplies the command — the ABOX names this used
-            // to hardcode exist only on Samsung's DSP and answered "control
-            // not found" on every other device.
-            val verify = DeviceProfile.resolveCmd(profile.mixerVerifyCmd)
-            if (verify.isNotEmpty()) {
-                appLog("Mixer BEFORE: ${RootShell.execForOutput(verify, timeoutMs = 8000)}")
-            }
+            val bin = DeviceProfile.tinymixBin
+            // Step 1: Readback BEFORE — see what HAL set during call setup
+            val before = RootShell.execForOutput(buildString {
+                append("echo 'NSRC0B:'; $bin 'ABOX NSRC0 Bridge' 2>&1; ")
+                append("echo 'NSRC1B:'; $bin 'ABOX NSRC1 Bridge' 2>&1; ")
+                append("echo 'NSRC0:'; $bin 'ABOX NSRC0' 2>&1; ")
+                append("echo 'NSRC1:'; $bin 'ABOX NSRC1' 2>&1; ")
+                append("echo 'SPUS0:'; $bin 'ABOX SPUS OUT0' 2>&1")
+            }, timeoutMs = 8000)
+            appLog("Mixer BEFORE: $before")
 
+            // Step 2: Run mixer setup commands (all ABOX controls on card 0)
+            // Use execForOutput to capture discovery/diagnostic output from setup commands
             val setupOutput = RootShell.execForOutput(resolvedSetup, timeoutMs = 8000)
             if (setupOutput.isNotBlank()) appLog("Mixer setup: $setupOutput")
 
-            if (verify.isNotEmpty()) {
-                appLog("Mixer AFTER: ${RootShell.execForOutput(verify, timeoutMs = 10000)}")
-            }
+            // Step 3: Readback AFTER — verify controls were actually changed
+            val readback = RootShell.execForOutput(buildString {
+                append("echo 'NSRC0B:'; $bin 'ABOX NSRC0 Bridge' 2>&1; ")
+                append("echo 'NSRC1B:'; $bin 'ABOX NSRC1 Bridge' 2>&1; ")
+                append("echo 'NSRC2B:'; $bin 'ABOX NSRC2 Bridge' 2>&1; ")
+                append("echo 'NSRC0:'; $bin 'ABOX NSRC0' 2>&1; ")
+                append("echo 'NSRC1:'; $bin 'ABOX NSRC1' 2>&1; ")
+                append("echo 'SPUS0:'; $bin 'ABOX SPUS OUT0' 2>&1")
+            }, timeoutMs = 10000)
+            appLog("Mixer AFTER: $readback")
         } catch (e: Exception) {
             appLog("Mixer setup FAILED: ${e.message}")
         }

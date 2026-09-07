@@ -1,12 +1,8 @@
 package com.callagent.gateway.bridge
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.telecom.Call
-import android.telephony.PhoneNumberUtils
-import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import com.callagent.gateway.RootShell
 import com.callagent.gateway.gsm.GsmCallManager
@@ -97,93 +93,8 @@ class CallOrchestrator(
         GsmCallManager.listener = null
     }
 
-    /**
-     * The number this gateway answers on, sent as the SIP destination.
-     *
-     * The server maps an incoming number to an assistant the same way it does
-     * a Fritz!Box DID, so it needs the MSISDN of our SIM here.  Addressing our
-     * own SIP account instead makes the platform see account N calling account
-     * N, match it as a local peer and ring us straight back — the INVITE comes
-     * back, the orchestrator rejects it as busy, and the GSM leg is never
-     * answered.
-     *
-     * Asks the platform first; many carriers do not publish the number on the
-     * SIM, in which case the configured value is used.
-     */
-    private fun inboundSipDestination(): String {
-        simNumber()?.let {
-            val intl = toInternational(it)
-            Log.i(TAG, "Own number from SIM: $it → $intl")
-            return intl
-        }
-        val configured = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
-            .getString("own_number", DEFAULT_OWN_NUMBER)?.trim().orEmpty()
-        if (configured.isNotEmpty()) {
-            val intl = toInternational(configured)
-            Log.i(TAG, "Own number from settings: $configured → $intl")
-            return intl
-        }
-        Log.w(TAG, "No own number known — addressing our own extension, which loops back")
-        return sipClient.username
-    }
-
-    /**
-     * The destination always goes out in international form.  What we have to
-     * start from varies: the platform may hand back E.164, the settings field
-     * may hold a national number ("015215320372"), and either may use a 00
-     * prefix.  PhoneNumberUtils resolves the national case against the SIM's
-     * country rather than us guessing a dialling code.
-     *
-     * The caller number in From is deliberately NOT put through this — that one
-     * is passed on exactly as the carrier delivered it.
-     */
-    private fun toInternational(number: String): String {
-        val trimmed = number.trim().filterNot { it == ' ' || it == '-' || it == '/' }
-        if (trimmed.startsWith("+")) return trimmed
-        if (trimmed.startsWith("00")) return "+" + trimmed.substring(2)
-        val iso = try {
-            (context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager)
-                .simCountryIso?.uppercase()?.ifEmpty { null }
-        } catch (e: Exception) {
-            Log.w(TAG, "SIM country unavailable: ${e.message}")
-            null
-        }
-        if (iso != null) {
-            PhoneNumberUtils.formatNumberToE164(trimmed, iso)?.let { return it }
-        }
-        Log.w(TAG, "Cannot make '$trimmed' international (SIM country=$iso) — sending as is")
-        return trimmed
-    }
-
-    /** The SIM's own number, when the carrier publishes it — many do not. */
-    @SuppressLint("MissingPermission")
-    private fun simNumber(): String? = try {
-        val number = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.getSystemService(SubscriptionManager::class.java)
-                ?.getPhoneNumber(SubscriptionManager.getDefaultSubscriptionId())
-        } else {
-            @Suppress("DEPRECATION")
-            (context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager).line1Number
-        }
-        number?.trim()?.ifEmpty { null }
-    } catch (e: Exception) {
-        Log.w(TAG, "SIM number unavailable: ${e.message}")
-        null
-    }
-
     /** Initiate an outgoing GSM call from the dialler, then bridge to SIP */
     fun initiateDiallerCall(number: String) {
-        // MMI/USSD is not a call — it never produces a Telecom Connection, so
-        // arming the bridge for it would strand us in GSM_DIALING until the
-        // stale-state timeout.
-        if (GsmCallManager.isMmiCode(number)) {
-            Log.i(TAG, "MMI code $number — sending as USSD, not bridging")
-            GsmCallManager.sendMmi(context, number) { result ->
-                Log.i(TAG, "MMI result: $result")
-                listener?.onStateChanged(bridgeState, "MMI: $result")
-            }
-            return
-        }
         if (bridgeState != BridgeState.IDLE) {
             // Check for stale state: if bridge has been non-IDLE for too long
             // without reaching BRIDGED, force a reset.  This happens on cold boot
@@ -484,7 +395,7 @@ class CallOrchestrator(
 
         val rtpPort = allocateRtpPort()
         val sipCall = sipClient.makeCall(
-            targetExtension = inboundSipDestination(),
+            targetExtension = sipClient.username, // call our own extension — Asterisk routes to agent
             localRtpPort = rtpPort,
             callerIdNumber = callerNumber,
             callerIdName = callerNumber
@@ -707,8 +618,5 @@ class CallOrchestrator(
         private const val GSM_DIAL_TIMEOUT_MS = 45_000L
         /** If bridge is non-IDLE for this long, consider it stale */
         private const val STALE_STATE_TIMEOUT_MS = 60_000L
-
-        /** Placeholder shown in settings until a real MSISDN is entered. */
-        private const val DEFAULT_OWN_NUMBER = "+49123123123123"
     }
 }

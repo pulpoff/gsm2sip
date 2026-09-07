@@ -92,31 +92,6 @@
         android:inputType="textPassword"
         android:importantForAutofill="no" />
 
-    <!-- Own number: the MSISDN of the SIM in this phone.  Sent as the SIP
-         destination so the server can map the call to an assistant, the same
-         way a Fritz!Box sends the DID that was dialled.  Use the format the
-         server's number table stores (e.g. 015215320372). -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Own Number (SIM)"
-        android:textStyle="bold"
-        android:textColor="@color/text_label"
-        android:layout_marginTop="12dp" />
-
-    <EditText
-        android:id="@+id/etOwnNumber"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="international, e.g. +4915215320372"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/text_hint"
-        android:background="@drawable/input_bg"
-        android:padding="10dp"
-        android:layout_marginTop="4dp"
-        android:inputType="phone"
-        android:importantForAutofill="no" />
-
     <!-- Autoconnect -->
     <CheckBox
         android:id="@+id/cbAutoconnect"
