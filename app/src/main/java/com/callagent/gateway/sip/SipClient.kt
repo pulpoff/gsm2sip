@@ -66,7 +66,7 @@ class SipClient(
      * Listener, which is about calls, and invoked on the receive thread — so
      * whatever it does must be quick.
      */
-    @Volatile var onSmsRequest: ((SipMessage) -> Int)? = null
+    @Volatile var onSmsRequest: ((SipMessage) -> Pair<Int, List<String>>)? = null
 
     private fun uiLog(msg: String) {
         Log.i(TAG, msg)
@@ -261,11 +261,11 @@ class SipClient(
 
         // Page-mode MESSAGE from the server — an SMS to send.
         if (msg.isRequest && msg.method == "MESSAGE") {
-            val code = try {
-                onSmsRequest?.invoke(msg) ?: 405
+            val (code, extra) = try {
+                onSmsRequest?.invoke(msg) ?: (405 to emptyList())
             } catch (e: Exception) {
-                Log.e(TAG, "onIncomingMessage failed: ${e.message}", e)
-                500
+                Log.e(TAG, "onSmsRequest failed: ${e.message}", e)
+                500 to emptyList()
             }
             val reason = when (code) {
                 200 -> "OK"
@@ -277,7 +277,7 @@ class SipClient(
                 503 -> "Service Unavailable"
                 else -> "Error"
             }
-            sendTo(SipBuilder.statusResponse(msg, code, reason), address)
+            sendTo(SipBuilder.statusResponse(msg, code, reason, extra), address)
             return
         }
 

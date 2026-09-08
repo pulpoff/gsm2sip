@@ -22,16 +22,24 @@ class SmsSendReceiver : BroadcastReceiver() {
         val part = intent.getIntExtra(SmsSender.EXTRA_PART, 0)
 
         when (intent.action) {
-            SmsSender.ACTION_SENT -> onSent(context, id, part, resultCode)
+            SmsSender.ACTION_SENT ->
+                onSent(context, id, part, resultCode, intent.getIntExtra("errorCode", -1))
             SmsSender.ACTION_DELIVERED -> onDelivered(context, id, part, intent)
             else -> return
         }
         GatewayService.reportSmsProgress(context, id)
     }
 
-    private fun onSent(context: Context, id: String, part: Int, result: Int) {
+    private fun onSent(context: Context, id: String, part: Int, result: Int, cause: Int) {
         val ok = result == Activity.RESULT_OK
-        val name = SmsSender.sentResultName(result)
+        // The network's cause is the half that says what to do about it:
+        // "modem_err" alone is a shrug, "modem_err/facility_rejected" is the
+        // carrier refusing the submission.
+        val name = if (ok || cause < 0) {
+            SmsSender.sentResultName(result)
+        } else {
+            "${SmsSender.sentResultName(result)}/${SmsSender.networkCauseName(cause)}"
+        }
         Log.i(TAG, "Sent result for $id part $part: $name")
         SmsOutbox.update(context, id) {
             if (ok) it.copy(sentOk = it.sentOk + 1)

@@ -1034,19 +1034,30 @@ class MainActivity : AppCompatActivity() {
                 if (incoming) R.drawable.ic_call_incoming else R.drawable.ic_call_outgoing
             )
             row.findViewById<TextView>(R.id.tvRowNumber).text = e.number
-            row.findViewById<TextView>(R.id.tvRowSub).text =
-                if (e.durationSec > 0) {
-                    if (incoming) "GSM → SIP" else "SIP → GSM"
-                } else {
-                    "Not connected"
-                }
+            val sms = e.type == CallLogStore.TYPE_SMS
+            // The direction arrow and the card are the same as a call's — a
+            // message is the same kind of traffic through the same gateway.
+            // What changes is the second line, which carries the message
+            // itself, and the slot where a call shows its duration.
+            row.findViewById<TextView>(R.id.tvRowSub).text = when {
+                sms -> e.text.replace('\n', ' ').trim().ifEmpty { "(no text)" }
+                e.durationSec > 0 -> if (incoming) "GSM → SIP" else "SIP → GSM"
+                else -> "Not connected"
+            }
             val dur = row.findViewById<TextView>(R.id.tvRowDuration)
-            if (e.durationSec > 0) {
-                dur.text = String.format("%02d:%02d", e.durationSec / 60, e.durationSec % 60)
-                dur.setTextColor(Color.parseColor("#34D399"))
-            } else {
-                dur.text = "—"
-                dur.setTextColor(Color.parseColor("#F87171"))
+            when {
+                sms -> {
+                    dur.text = "SMS"
+                    dur.setTextColor(Color.parseColor("#60A5FA"))
+                }
+                e.durationSec > 0 -> {
+                    dur.text = String.format("%02d:%02d", e.durationSec / 60, e.durationSec % 60)
+                    dur.setTextColor(Color.parseColor("#34D399"))
+                }
+                else -> {
+                    dur.text = "—"
+                    dur.setTextColor(Color.parseColor("#F87171"))
+                }
             }
             val d = java.util.Date(e.timestamp)
             val sameDay = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(d) == today

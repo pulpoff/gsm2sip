@@ -74,8 +74,15 @@ object SmsSender {
     /**
      * Distinct PendingIntents per part.  Without a unique request code the
      * platform hands every part the same one and the parts become
-     * indistinguishable; FLAG_IMMUTABLE because nothing outside should be able
-     * to rewrite where a delivery report goes.
+     * indistinguishable.
+     *
+     * FLAG_MUTABLE is not a lapse here, it is the requirement: telephony
+     * reports its results by *filling in* extras — the network's cause code on
+     * a failure, and the status report's PDU on delivery — and an immutable
+     * PendingIntent drops both without a word.  That is why failures read as a
+     * bare "modem_err" with no reason, and why every delivery report parsed as
+     * status=unknown.  The intent is explicit — our own package, our own
+     * receiver class — so nothing else can be targeted through it.
      */
     private fun pendingIntent(context: Context, action: String, id: String, part: Int): PendingIntent {
         val intent = Intent(action).apply {
@@ -87,11 +94,17 @@ object SmsSender {
         val requestCode = (id.hashCode() * 31 + part) * 2 + if (action == ACTION_SENT) 0 else 1
         return PendingIntent.getBroadcast(
             context, requestCode, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
     }
 
-    /** Android's send-failure codes, as something a dialplan can read. */
+    /**
+     * Android's send-failure codes, as something a dialplan can read.
+     *
+     * The RIL range (100+) is where the interesting failures live — a bare
+     * "error_111" says nothing, while "modem_err" plus the network's own
+     * cause value says whether to retry, fix the number, or call the carrier.
+     */
     fun sentResultName(resultCode: Int): String = when (resultCode) {
         android.app.Activity.RESULT_OK -> "ok"
         SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "generic_failure"
@@ -100,7 +113,54 @@ object SmsSender {
         SmsManager.RESULT_ERROR_RADIO_OFF -> "radio_off"
         SmsManager.RESULT_ERROR_LIMIT_EXCEEDED -> "limit_exceeded"
         SmsManager.RESULT_ERROR_SHORT_CODE_NOT_ALLOWED -> "short_code_not_allowed"
+        100 -> "radio_not_available"
+        101 -> "send_fail_retry"
+        102 -> "network_reject"
+        103 -> "invalid_state"
+        104 -> "invalid_arguments"
+        105 -> "no_memory"
+        106 -> "request_rate_limited"
+        107 -> "invalid_sms_format"
+        108 -> "system_err"
+        109 -> "encoding_err"
+        110 -> "invalid_smsc_address"
+        111 -> "modem_err"
+        112 -> "network_err"
+        113 -> "internal_err"
+        114 -> "request_not_supported"
+        115 -> "invalid_modem_state"
+        116 -> "network_not_ready"
+        117 -> "operation_not_allowed"
+        118 -> "no_resources"
+        119 -> "cancelled"
+        120 -> "sim_absent"
         else -> "error_$resultCode"
+    }
+
+    /**
+     * The network's own reason, from GSM 04.11 — carried in the sent
+     * broadcast's "errorCode" extra when the failure came from the network
+     * rather than the framework.
+     */
+    fun networkCauseName(cause: Int): String = when (cause) {
+        1 -> "unassigned_number"
+        8 -> "operator_determined_barring"
+        10 -> "call_barred"
+        21 -> "sms_transfer_rejected"
+        27 -> "destination_out_of_order"
+        28 -> "unidentified_subscriber"
+        29 -> "facility_rejected"
+        30 -> "unknown_subscriber"
+        38 -> "network_out_of_order"
+        41 -> "temporary_failure"
+        42 -> "congestion"
+        47 -> "resources_unavailable"
+        69 -> "facility_not_implemented"
+        95 -> "semantically_incorrect"
+        96 -> "invalid_mandatory_information"
+        111 -> "protocol_error"
+        127 -> "interworking"
+        else -> "cause_$cause"
     }
 
     private fun describe(e: Exception): String =

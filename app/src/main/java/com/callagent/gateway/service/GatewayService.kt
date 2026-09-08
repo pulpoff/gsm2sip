@@ -560,11 +560,11 @@ class GatewayService : Service() {
      * promise that the message is now ours to deliver and report on, so
      * nothing is answered 202 until it is safely on disk.
      */
-    fun onSmsSendRequest(msg: com.callagent.gateway.sip.SipMessage): Int {
+    fun onSmsSendRequest(msg: com.callagent.gateway.sip.SipMessage): Pair<Int, List<String>> {
         val type = msg.contentType?.lowercase().orEmpty()
         if (type.isNotEmpty() && !type.startsWith("text/plain")) {
             broadcastLog("SMS send refused: unsupported Content-Type '$type'")
-            return 415
+            return 415 to emptyList()
         }
         val target = (msg.header("x-sms-to")
             ?: msg.requestUri?.let { msg.extractUser(it) }
@@ -573,22 +573,29 @@ class GatewayService : Service() {
         val text = msg.body
         if (target.isEmpty() || text.isEmpty()) {
             broadcastLog("SMS send refused: missing recipient or body")
-            return 400
+            return 400 to emptyList()
         }
         if (!hasSendSms()) {
             // 503 rather than 4xx: the server should try this one again once
             // the permission is in place, not give up on it.
             broadcastLog("SMS send refused: SEND_SMS not granted")
-            return 503
+            return 503 to emptyList()
         }
 
         val id = msg.header("x-sms-id")?.trim().takeUnless { it.isNullOrEmpty() }
             ?: SmsStore.newId()
+        // What this message will actually cost, answered in the 202 rather
+        // than after the fact: one character outside GSM-7 forces the whole
+        // message to UCS-2, which halves a part from 160 characters to 70 —
+        // an 88-character reply that would have been one part becomes two.
+        // The sender can only act on that if it is told before it commits.
+        val cost = measure(text)
+
         val existing = SmsOutbox.get(this, id)
         if (existing != null) {
             // The server repeated a request whose response it did not see.
             broadcastLog("SMS send: $id already accepted — not sending twice")
-            return 202
+            return 202 to cost
         }
 
         val subId = resolveSubscription(
@@ -596,6 +603,17 @@ class GatewayService : Service() {
             msg.header("x-sms-sim-slot")?.trim()?.toIntOrNull()
         )
         SmsOutbox.add(this, OutboundSms(id = id, to = target, text = text, subId = subId))
+        CallLogStore.addEntry(
+            this,
+            CallLogEntry(
+                direction = "OUT",
+                number = target,
+                timestamp = System.currentTimeMillis(),
+                durationSec = 0,
+                type = CallLogStore.TYPE_SMS,
+                text = text
+            )
+        )
         broadcastLog("SMS send: $id to $target accepted (${text.length} chars, sub=$subId)")
 
         val intent = Intent(this, GatewayService::class.java).apply { action = ACTION_SMS_SEND }
@@ -604,7 +622,24 @@ class GatewayService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "Could not schedule SMS dispatch: ${e.message}")
         }
-        return 202
+        return 202 to cost
+    }
+
+    /** Parts and encoding, as headers for the 202. */
+    private fun measure(text: String): List<String> = try {
+        // [0] parts, [1] code units used, [2] remaining, [3] encoding
+        val m = android.telephony.SmsMessage.calculateLength(text, false)
+        // SmsMessage.ENCODING_7BIT = 1, ENCODING_8BIT = 2, ENCODING_16BIT = 3
+        val encoding = when (m[3]) {
+            1 -> "GSM7"
+            2 -> "8BIT"
+            3 -> "UCS2"
+            else -> "UNKNOWN"
+        }
+        listOf("X-SMS-Parts: ${m[0]}", "X-SMS-Encoding: $encoding")
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not measure message: ${e.message}")
+        emptyList()
     }
 
     /** Which SIM to send from: an explicit subscription wins, then a slot, then

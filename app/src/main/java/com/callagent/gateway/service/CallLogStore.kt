@@ -8,10 +8,18 @@ data class CallLogEntry(
     val direction: String,  // "IN" or "OUT"
     val number: String,
     val timestamp: Long,    // millis since epoch (call start)
-    val durationSec: Long
+    val durationSec: Long,
+    /** "CALL" or "SMS".  Defaulted, so entries written before messages
+     *  existed still read back as calls. */
+    val type: String = CallLogStore.TYPE_CALL,
+    /** Message text, for SMS entries. */
+    val text: String = ""
 )
 
 object CallLogStore {
+    const val TYPE_CALL = "CALL"
+    const val TYPE_SMS = "SMS"
+
     private const val PREFS = "call_log"
     private const val KEY = "entries"
 
@@ -39,6 +47,8 @@ object CallLogStore {
             put("num", entry.number)
             put("ts", entry.timestamp)
             put("dur", entry.durationSec)
+            if (entry.type != TYPE_CALL) put("type", entry.type)
+            if (entry.text.isNotEmpty()) put("text", entry.text)
         }
         arr.put(obj)
         // Oldest first in storage, so trim from the front.
@@ -57,7 +67,9 @@ object CallLogStore {
                 direction = obj.getString("dir"),
                 number = obj.getString("num"),
                 timestamp = obj.getLong("ts"),
-                durationSec = obj.getLong("dur")
+                durationSec = obj.getLong("dur"),
+                type = obj.optString("type", TYPE_CALL),
+                text = obj.optString("text", "")
             )
         }.reversed() // newest first
         cachedEntries = entries
@@ -69,8 +81,10 @@ object CallLogStore {
         val outCalls: Int, val outDurationSec: Long
     )
 
+    /** Call counters only — a message is not a call and must not inflate
+     *  the totals the status broadcast carries. */
     fun getTotals(context: Context): Totals {
-        val entries = getEntries(context)
+        val entries = getEntries(context).filter { it.type == TYPE_CALL }
         return Totals(
             inCalls = entries.count { it.direction == "IN" },
             inDurationSec = entries.filter { it.direction == "IN" }.sumOf { it.durationSec },

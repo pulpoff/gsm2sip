@@ -7,6 +7,8 @@ import android.os.Build
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.util.Log
+import com.callagent.gateway.service.CallLogEntry
+import com.callagent.gateway.service.CallLogStore
 import com.callagent.gateway.service.GatewayService
 
 /**
@@ -58,6 +60,20 @@ class SmsReceiver : BroadcastReceiver() {
         // Written to disk before anything is attempted: this broadcast is the
         // only copy of the message we will ever get.
         SmsStore.add(context, sms)
+        // On arrival, not on forward: the message happened whether or not the
+        // server is reachable, and the traffic list is a record of what the
+        // gateway saw.
+        CallLogStore.addEntry(
+            context,
+            CallLogEntry(
+                direction = "IN",
+                number = sender,
+                timestamp = sms.receivedAt,
+                durationSec = 0,
+                type = CallLogStore.TYPE_SMS,
+                text = text
+            )
+        )
         Log.i(TAG, "SMS from $sender (${parts.size} part(s), sub=$subId slot=$slot) queued as ${sms.id}")
 
         GatewayService.deliverQueuedSms(context)
