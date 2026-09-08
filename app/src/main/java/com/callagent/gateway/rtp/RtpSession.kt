@@ -837,6 +837,12 @@ class RtpSession(
         val pcmBuf = ByteArray(samplesPerFrame * 2)
         val defaultRemoteInet = InetAddress.getByName(remoteAddr)
         var silenceFrameCount = 0
+        // Whether this source has ever delivered audio.  The silence detector
+        // answers "does this source work at all", which is only an open
+        // question until the first frame arrives; after that, quiet means the
+        // line is quiet.
+        var sourceProven = false
+        var lastDeadAirLog = 0L
 
         while (running.get()) {
             try {
@@ -865,17 +871,41 @@ class RtpSession(
                             Log.w(TAG, "Source $audioSourceName low audio (no-echo): rawCapRMS=$rawCaptureRms silence=${silenceFrameCount}/${SILENCE_FRAME_LIMIT} frames")
                         }
                         if (silenceFrameCount >= SILENCE_FRAME_LIMIT) {
-                            val msg = "Source $audioSourceName SILENT ($silenceFrameCount non-echo frames) — trying fallback"
-                            Log.w(TAG, msg)
-                            listener?.onRtpStats(msg)
-                            silentSourceIds.add(currentSourceId)
-                            try { record.stop() } catch (_: Exception) {}
-                            record.release()
-                            audioRecord = null
-                            return false  // Signal: try another source
+                            if (sourceProven) {
+                                // Dead air, not a dead source.  Tearing the
+                                // AudioRecord down here and blacklisting the
+                                // source was catastrophic mid-call: with
+                                // playbackLeaksIntoCapture off every quiet
+                                // frame counts, so ${SILENCE_FRAME_LIMIT / 50}s
+                                // of nobody speaking retired a working source.
+                                // A few of those exhausted the source list and
+                                // capture stayed dead for the rest of the call
+                                // — the agent stopped hearing the caller and
+                                // never got them back.
+                                val now = System.currentTimeMillis()
+                                if (now - lastDeadAirLog > 30_000) {
+                                    lastDeadAirLog = now
+                                    val msg = "Dead air ${silenceFrameCount / 50}s on " +
+                                        "$audioSourceName (source proven — keeping it)"
+                                    Log.w(TAG, msg)
+                                    listener?.onRtpStats(msg)
+                                }
+                                silenceFrameCount = 0
+                            } else {
+                                val msg = "Source $audioSourceName SILENT ($silenceFrameCount non-echo frames) — trying fallback"
+                                Log.w(TAG, msg)
+                                listener?.onRtpStats(msg)
+                                silentSourceIds.add(currentSourceId)
+                                try { record.stop() } catch (_: Exception) {}
+                                record.release()
+                                audioRecord = null
+                                return false  // Signal: try another source
+                            }
                         }
                     } else {
-                        silenceFrameCount = 0  // Source delivered audio during non-echo → working
+                        // Source delivered audio during non-echo → working
+                        silenceFrameCount = 0
+                        sourceProven = true
                     }
                 }
                 // During echo periods: don't update counter (can't distinguish

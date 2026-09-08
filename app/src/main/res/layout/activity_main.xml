@@ -371,6 +371,18 @@
                         android:textStyle="bold"
                         android:textColor="@color/text_primary"
                         android:paddingStart="12dp" />
+
+                    <!-- Live event log — SIP registration, calls, GSM and
+                         network transitions.  The old settings screen showed
+                         it inline; it has its own screen now, reached here. -->
+                    <ImageButton
+                        android:id="@+id/btnCfgLogs"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_logs"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Logs" />
                 </LinearLayout>
 
                 <ScrollView
@@ -479,6 +491,83 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp" />
                     </LinearLayout>
+                </ScrollView>
+            </LinearLayout>
+
+            <!-- ── Logs (reached from the Settings header) ── -->
+            <LinearLayout
+                android:id="@+id/tabLogs"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:background="@color/background"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:padding="14dp">
+
+                    <ImageButton
+                        android:id="@+id/btnLogsBack"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_arrow_back"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Back" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Logs"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:paddingStart="12dp" />
+
+                    <ImageButton
+                        android:id="@+id/btnLogsCopy"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_copy"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Copy log"
+                        android:layout_marginEnd="8dp" />
+
+                    <ImageButton
+                        android:id="@+id/btnLogsClear"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_trash"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/input_bg"
+                        android:contentDescription="Clear log" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/svLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@color/surface"
+                    android:padding="8dp"
+                    android:layout_marginHorizontal="14dp"
+                    android:layout_marginBottom="14dp">
+
+                    <TextView
+                        android:id="@+id/tvLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_log"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textIsSelectable="true"
+                        android:text="" />
                 </ScrollView>
             </LinearLayout>
 
@@ -809,25 +898,8 @@
                         android:layout_marginStart="3dp" />
                 </LinearLayout>
 
-                <!-- Log fills remaining space -->
-                <ScrollView
-                    android:id="@+id/svLog"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:background="@color/surface"
-                    android:padding="8dp"
-                    android:layout_margin="16dp">
-
-                    <TextView
-                        android:id="@+id/tvLog"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_log"
-                        android:textSize="12sp"
-                        android:fontFamily="monospace"
-                        android:text="" />
-                </ScrollView>
+                <!-- The log used to fill the rest of this screen; it moved to
+                     its own Logs view, reached from the Settings header. -->
             </LinearLayout>
 
         </FrameLayout>

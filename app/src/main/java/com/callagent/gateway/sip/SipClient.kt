@@ -100,6 +100,16 @@ class SipClient(
     fun stop() {
         running.set(false)
         registered = false
+        // A stopped client must not be able to drive the service any more.
+        // monitorLoop can be up to 10s into a sleep or blocked on the
+        // registration latch when stop() lands, and the callback it fired on
+        // the way out tore down the *replacement* client.
+        onConnectionLost = null
+        listener = null
+        // Release anyone blocked waiting for a REGISTER response so the
+        // thread reaches its running.get() check instead of sitting out the
+        // full 10s timeout.
+        registrationLatch?.countDown()
         activeCalls.values.forEach { it.hangup() }
         activeCalls.clear()
         sendExecutor?.shutdownNow()
@@ -512,7 +522,7 @@ class SipClient(
                         // cooldown instead of restarting the retry cycle.
                         uiLog("Registration failing repeatedly, requesting reconnect")
                         registerFailures = 0
-                        onConnectionLost?.invoke()
+                        if (running.get()) onConnectionLost?.invoke()
                     }
                 } else {
                     // Keeping the NAT binding open needs a packet every 20-30s,
@@ -539,7 +549,7 @@ class SipClient(
                             if (keepaliveFailures >= MAX_KEEPALIVE_FAILURES) {
                                 uiLog("Registration refresh failed $keepaliveFailures times")
                                 keepaliveFailures = 0
-                                onConnectionLost?.invoke()
+                                if (running.get()) onConnectionLost?.invoke()
                             }
                         } else {
                             keepaliveFailures = 0

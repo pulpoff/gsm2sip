@@ -17,6 +17,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.telephony.TelephonyManager
 import android.util.Log
 import com.callagent.gateway.BuildConfig
 import com.callagent.gateway.GatewayApp
@@ -65,6 +66,20 @@ class GatewayService : Service() {
     /** Prevents concurrent startGateway / reconnect threads */
     private val initializing = AtomicBoolean(false)
 
+    /**
+     * Bumped on every bring-up.  A SIP init is slow — Magisk `su` can take
+     * seconds, STUN can take seconds more — and the stale-init recovery
+     * releases [initializing] after 90s whether or not that thread has
+     * finished.  Without a generation the late thread published its own
+     * SipClient over the newer one and the older client was never stopped:
+     * it kept its socket on :5060 (SO_REUSEADDR lets several bind), kept its
+     * monitor loop, and every REGISTER it sent timed out because the kernel
+     * delivered the response to one socket only.  Each timeout escalated the
+     * process-wide REGISTER backoff, so a healthy client ended up held off
+     * for five minutes at a time.  The device had four live SipClients.
+     */
+    private val initGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** When [initializing] was last set, so a stuck flag can be detected.
      *
      *  If the init thread dies or hangs, this flag stays true forever, and then
@@ -82,11 +97,65 @@ class GatewayService : Service() {
     // ── Network change detection ────────────────────────
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    /** Last transport we logged, so the constant capability churn does not
+     *  fill the log with identical lines. */
+    private var lastTransport = ""
+
+    /**
+     * Describe the network actually carrying our traffic — "WiFi", "LTE",
+     * "5G" — and log it when it changes.  A WiFi drop that hands over to
+     * cellular, or an LTE re-attach, is exactly the kind of event that
+     * explains a re-REGISTER after the fact, and none of it was visible:
+     * transport changes only ever reached logcat.
+     */
+    private fun logTransportIfChanged() {
+        val desc = try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val active = cm.activeNetwork
+            val caps = active?.let { cm.getNetworkCapabilities(it) }
+            when {
+                caps == null -> "none"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> mobileGeneration()
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                else -> "other"
+            }
+        } catch (e: Exception) {
+            "unknown (${e.message})"
+        }
+        if (desc == lastTransport) return
+        val previous = lastTransport
+        lastTransport = desc
+        // First observation is the baseline, not a transition.
+        if (previous.isEmpty()) broadcastLog("NET: on $desc")
+        else broadcastLog("NET: $previous → $desc")
+    }
+
+    /** LTE / 5G / 3G for the data connection, mirroring the home view's label. */
+    private fun mobileGeneration(): String = try {
+        val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        when (tm.dataNetworkType) {
+            TelephonyManager.NETWORK_TYPE_NR -> "5G"
+            TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+            TelephonyManager.NETWORK_TYPE_HSPAP,
+            TelephonyManager.NETWORK_TYPE_HSPA,
+            TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
+            TelephonyManager.NETWORK_TYPE_EDGE,
+            TelephonyManager.NETWORK_TYPE_GPRS -> "2G"
+            else -> "Mobile"
+        }
+    } catch (_: SecurityException) {
+        "Mobile"
+    } catch (_: Exception) {
+        "Mobile"
+    }
+
     private fun registerNetworkCallback() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 Log.i(TAG, "Network available")
+                logTransportIfChanged()
                 checkNetworkChanged()
             }
             override fun onLost(network: Network) {
@@ -99,9 +168,10 @@ class GatewayService : Service() {
                 } ?: false
                 if (busy) {
                     Log.i(TAG, "Skipping reconnect — call in progress (${orchestrator?.bridgeState})")
-                    broadcastLog("Network lost (ignored — call active)")
+                    broadcastLog("NET: lost (ignored — call active)")
                     return
                 }
+                logTransportIfChanged()
                 // Don't reconnect on the strength of onLost alone.  This
                 // fires whenever any network goes away — cellular settling
                 // after boot, mobile data dropping while WiFi carries the
@@ -112,6 +182,7 @@ class GatewayService : Service() {
                 checkNetworkChanged()
             }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                logTransportIfChanged()
                 checkNetworkChanged()
             }
         }
@@ -147,8 +218,8 @@ class GatewayService : Service() {
         val ipChanged = newIp != currentLocalIp
         val notRegistered = sipClient?.registered != true
         if (ipChanged || notRegistered) {
-            if (ipChanged) broadcastLog("Network changed: $currentLocalIp → $newIp")
-            else broadcastLog("Network recovered, reconnecting...")
+            if (ipChanged) broadcastLog("NET: IP changed $currentLocalIp → $newIp, reconnecting")
+            else broadcastLog("NET: registration lost, reconnecting")
             reconnect()
         }
     }
@@ -162,7 +233,7 @@ class GatewayService : Service() {
         }
         initializingSince = System.currentTimeMillis()
         onlineSince = 0L
-        broadcastLog("Reconnecting...")
+        broadcastLog("SIP: reconnecting")
         broadcastStatus("STARTING", "Reconnecting...")
         updateNotification(NotifState.WARN, "Connecting")
 
@@ -172,9 +243,10 @@ class GatewayService : Service() {
         orchestrator = null
         sipClient = null
 
+        val gen = initGeneration.incrementAndGet()
         thread(name = "gateway-reconnect") {
             try {
-                initSipClient()
+                initSipClient(gen)
             } finally {
                 initializing.set(false)
             }
@@ -385,13 +457,14 @@ class GatewayService : Service() {
         initializingSince = System.currentTimeMillis()
 
         // Run network I/O off the main thread (Android blocks sockets on main thread)
+        val gen = initGeneration.incrementAndGet()
         thread(name = "gateway-init") {
             try {
                 // Force-allow RECORD_AUDIO BEFORE SIP registration.
                 // Magisk su takes 4+ seconds on first invocation (root server
                 // startup).  Must complete before any calls can arrive.
                 forceAllowRecordAudio()
-                initSipClient()
+                initSipClient(gen)
             } finally {
                 initializing.set(false)
             }
@@ -399,7 +472,27 @@ class GatewayService : Service() {
     }
 
     /** Shared SIP init — called from both startGateway and reconnect threads. */
-    private fun initSipClient() {
+    private fun initSipClient(gen: Int) {
+        /** True while this thread is still the newest bring-up. */
+        fun current() = gen == initGeneration.get()
+
+        if (!current()) {
+            Log.w(TAG, "initSipClient: superseded before start (gen $gen)")
+            return
+        }
+
+        // A previous client must be gone before another socket is bound to
+        // :5060.  reconnect() already does this, but startGateway() and the
+        // stale-init recovery reach here without it.
+        sipClient?.let {
+            Log.w(TAG, "initSipClient: stopping previous SIP client")
+            broadcastLog("SIP: stopping previous client before rebind")
+            orchestrator?.stop()
+            it.stop()
+            orchestrator = null
+            sipClient = null
+        }
+
         val localIp = getLocalIp()
         currentLocalIp = localIp
         broadcastLog("Local IP: $localIp")
@@ -417,6 +510,10 @@ class GatewayService : Service() {
         }
 
         if (stopped) return
+        if (!current()) {
+            Log.w(TAG, "initSipClient: superseded during STUN (gen $gen)")
+            return
+        }
 
         val sip = SipClient(
             username = cfgUser,
@@ -433,6 +530,10 @@ class GatewayService : Service() {
         orch.listener = object : CallOrchestrator.OrchestratorListener {
             override fun onStateChanged(state: CallOrchestrator.BridgeState, info: String) {
                 Log.i(TAG, "Bridge: $state - $info")
+                // The call lifecycle only ever reached logcat and the status
+                // pill; the log viewer showed SIP and audio lines with no
+                // record of the call they belonged to.
+                broadcastLog("CALL: ${state.name}${if (info.isBlank()) "" else " — $info"}")
                 val registered = sip.registered
 
                 // Track online time
@@ -511,6 +612,14 @@ class GatewayService : Service() {
         sip.logListener = { msg -> broadcastLog("SIP: $msg") }
         GsmCallManager.logCallback = { msg -> broadcastLog("AUDIO: $msg") }
         sip.onConnectionLost = { reconnect() }
+
+        // Last check before anything binds a socket: if a newer bring-up has
+        // started meanwhile, this client must not exist at all.
+        if (!current() || sipClient !== sip) {
+            Log.w(TAG, "initSipClient: superseded before start (gen $gen) — discarding")
+            orch.stop()
+            return
+        }
 
         try {
             sip.start()

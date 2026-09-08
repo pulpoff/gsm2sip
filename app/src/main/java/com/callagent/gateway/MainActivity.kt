@@ -131,6 +131,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabDialer: LinearLayout
     private lateinit var tabCalls: LinearLayout
     private lateinit var tabSettings: LinearLayout
+    private lateinit var tabLogs: LinearLayout
     private var currentTab = ""
 
     // In-call views
@@ -356,6 +357,14 @@ class MainActivity : AppCompatActivity() {
         tabCalls = findViewById(R.id.tabCalls)
         tabSettings = findViewById(R.id.tabSettings)
 
+        // Logs view — opened from the Settings header, back returns there
+        // rather than to home, so the icon behaves like a drill-down.
+        tabLogs = findViewById(R.id.tabLogs)
+        findViewById<View>(R.id.btnCfgLogs).setOnClickListener { switchTab("logs") }
+        findViewById<View>(R.id.btnLogsBack).setOnClickListener { switchTab("config") }
+        findViewById<View>(R.id.btnLogsCopy).setOnClickListener { copyLog() }
+        findViewById<View>(R.id.btnLogsClear).setOnClickListener { clearLog() }
+
         // Tab bar buttons
 
 
@@ -454,10 +463,14 @@ class MainActivity : AppCompatActivity() {
         tabDialer.visibility = if (tab == "dialer") View.VISIBLE else View.GONE
         tabCalls.visibility = if (tab == "calls") View.VISIBLE else View.GONE
         tabSettings.visibility = if (tab == "settings") View.VISIBLE else View.GONE
+        tabLogs.visibility = if (tab == "logs") View.VISIBLE else View.GONE
 
         when (tab) {
             "calls" -> refreshCallLog()
             "home" -> refreshHome()
+            // The view scrolls as lines arrive, but only while it is visible;
+            // opening it has to jump to the newest entry itself.
+            "logs" -> svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }
 
@@ -990,6 +1003,8 @@ class MainActivity : AppCompatActivity() {
     override fun onBackPressed() {
         if (inCallOpen) {
             return // must use END CALL
+        } else if (currentTab == "logs") {
+            switchTab("config")
         } else if (currentTab != "home") {
             switchTab("home")
         } else {
@@ -2000,6 +2015,12 @@ class MainActivity : AppCompatActivity() {
             tvLog.append("$ts  $msg\n")
             svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
         }
+    }
+
+    private fun clearLog() {
+        tvLog.text = ""
+        GatewayService.drainLogBuffer()
+        Toast.makeText(this, "Log cleared", Toast.LENGTH_SHORT).show()
     }
 
     private fun copyLog() {
