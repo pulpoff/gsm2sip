@@ -921,6 +921,12 @@ class GatewayService : Service() {
         com.callagent.gateway.sip.SipBuilder.codecMode =
             prefs.getString("codec", "g722") ?: "g722"
 
+        // The agent's level into the GSM uplink, as a step away from what the
+        // device profile asks for.  Read here so a change applies on save
+        // rather than waiting for the next call.
+        com.callagent.gateway.gsm.GsmCallManager.agentVolumeStep =
+            prefs.getInt("agent_vol_step", 0)
+
         cfgServer = server
         cfgPort = port
         cfgUser = username

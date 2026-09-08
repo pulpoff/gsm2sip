@@ -178,11 +178,24 @@ Whatever the server routes on, it has to recognise the SIM's number: the
 gateway puts that number in the Request-URI, so a dialplan or number table
 keyed on it is what decides where the call goes.
 
-## Asterisk Configuration (example)
+## Quick start with callagent.pro
 
-The gateway itself is server-agnostic — it registers like any SIP client. What
-follows is one worked example, using Asterisk (chan_sip) to route inbound GSM
-calls to an AI agent. Adapt it to whatever your server does.
+Once installed, you can use gsm2sip instantly with a free
+[callagent.pro](https://callagent.pro) registration. The account is a SIP
+server that already knows how this gateway addresses calls and messages, so
+there is nothing to write on the server side:
+
+1. Register at [callagent.pro](https://callagent.pro) and create an extension.
+2. Open the gateway's **Settings** and fill in the server, extension and
+   password, plus the SIM's own number under **Own Number**.
+3. Save. The gateway registers, and calls to the SIM reach your agent.
+
+## The longer way: your own Asterisk
+
+The gateway is server-agnostic — it registers like any SIP client — so you can
+point it at a server you run instead. What follows is one worked example,
+using Asterisk (chan_sip) to route inbound GSM calls to an AI agent. Adapt it
+to whatever your server does.
 
 It addresses calls the way a VoIP router does: the Request-URI carries the
 SIM's number and `From` carries the calling party. That shapes the config
@@ -266,10 +279,14 @@ there is `Set(PJSIP_HEADER(add,X-GSM-Forward)=${EXTEN})`.
 
 Allow enough time in `Dial()` for GSM setup — 60s is comfortable, 20s is not.
 
-### What the gateway answers with
+## Call status codes
 
-It reports progress and failure the way a provider does, so the dialplan can
+What the gateway answers with is a property of the gateway, not of any one
+server, so this holds whichever server you point it at. It reports progress
+and failure the way a provider does — on Asterisk that means the dialplan can
 branch on `${DIALSTATUS}` and `${HANGUPCAUSE}` instead of guessing.
+
+### Outbound — the server asks the gateway to dial
 
 | Situation | Response |
 | --- | --- |
@@ -285,14 +302,37 @@ branch on `${DIALSTATUS}` and `${HANGUPCAUSE}` instead of guessing.
 | No destination in the INVITE | `488 Not Acceptable Here` |
 | Anything failing after the answer | `BYE` |
 
-A `488` means the INVITE named no number the gateway could dial — neither a
-header nor a usable Request-URI. Under `chan_sip` that usually means
-`SIPAddHeader()` ran on a different channel than the one that was dialled;
-under `chan_pjsip` it means `SIPAddHeader()` ran at all.
+The `180` carries no SDP, deliberately. Without an SDP answer the server
+cannot open an early-media path, so an agent cannot be bridged into a call the
+mobile has not picked up yet — if you ever hear the agent start talking before
+you answer, something other than this gateway put it there. `183 Session
+Progress` is never sent for that reason.
 
-Note that only a call the gateway answered is ended with `BYE`. One that never
-connected is turned down with the final response above, which is the only
-place the server learns why the GSM leg did not come up.
+A `488` means the INVITE named no number the gateway could dial — neither an
+`X-GSM-Forward` header nor a usable Request-URI. Under `chan_sip` that usually
+means `SIPAddHeader()` ran on a different channel than the one that was
+dialled; under `chan_pjsip` it means `SIPAddHeader()` ran at all.
+
+Only a call the gateway answered is ended with `BYE`. One that never connected
+is turned down with the final response above, which is the only place the
+server learns why the GSM leg did not come up — a `BYE` for an unanswered
+INVITE is not valid, and a server that gets one replies `481` and then sits
+out its own timer, which makes every failure look alike and look like a
+timeout.
+
+### Inbound — the SIM rings and the gateway calls the server
+
+Here the gateway is the caller, so these are the responses it acts on. It
+places the INVITE while the GSM leg is still ringing and answers the GSM call
+only once the server sends `200 OK`, so the caller hears normal ringing until
+the agent is actually on the line, with no dead air at the join.
+
+| Server sends | Gateway does |
+| --- | --- |
+| `100` / `180` / `183` | Keeps the GSM leg ringing |
+| `200 OK` | Answers the GSM call and starts the bridge |
+| `486` / `603` / any 4xx-6xx | Ends the GSM call |
+| No response | Retries, then gives up and ends the GSM call |
 
 ## SMS over SIP
 

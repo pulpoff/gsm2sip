@@ -36,6 +36,7 @@ object GsmCallManager {
 
     private const val TAG = "GsmCallManager"
 
+
     /** Active device profile — initialized on first use. */
     val profile: DeviceProfile by lazy { DeviceProfile.detect() }
 
@@ -106,7 +107,6 @@ object GsmCallManager {
             }
             Call.STATE_DIALING, Call.STATE_CONNECTING -> {
                 Log.i(TAG, "Outgoing GSM call to $number")
-                silenceDialTone()
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active: $number")
@@ -125,32 +125,7 @@ object GsmCallManager {
      *  worth depending on. */
     @Volatile private var endedCall: Call? = null
 
-    /**
-     * Silence the ringback the handset plays while an outgoing call is set up.
-     *
-     * The ALSA voice mutes cannot do this one: they are gated on the HAL's
-     * is_call_active flag and only take effect once capture is running, which
-     * is well after the network has started sending ringback — so the room
-     * hears the first of it.  This goes through AudioManager instead, the same
-     * way the incoming ringtone is silenced in onCallAdded.  A gateway should
-     * be quiet whichever direction the call goes.
-     *
-     * Only for profiles that silence the handset anyway.  The ones that need
-     * the speaker up to capture audio must not have the voice stream muted out
-     * from under them, and on MSM8930 muting this stream kills the
-     * incall_music injection path outright (see enforceVolumes).
-     */
-    private fun silenceDialTone() {
-        if (!profile.silenceLocalAudio) return
-        val service = inCallService ?: return
-        try {
-            val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0)
-            appLog("Outgoing ringback silenced")
-        } catch (e: Exception) {
-            Log.w(TAG, "Ringback silence failed: ${e.message}")
-        }
-    }
+
 
     private fun notifyCallEnded(call: Call) {
         if (endedCall === call) return
@@ -194,9 +169,6 @@ object GsmCallManager {
                 val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
                 Log.i(TAG, "GSM call ringing: $number (via state change)")
                 listener?.onIncomingGsmCall(call, number)
-            }
-            Call.STATE_DIALING, Call.STATE_CONNECTING -> {
-                silenceDialTone()
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active")
@@ -343,6 +315,28 @@ object GsmCallManager {
     }
 
     /** Music volume percent — from device profile. */
+    /**
+     * Manual trim on the agent's level into the GSM uplink, -3..+3, 0 being
+     * the device profile's own value.
+     *
+     * It multiplies [DeviceProfile.playbackGain] rather than the music stream
+     * volume, because the stream is not where the loudness lives: it clips
+     * above about 14% on the devices that inject through incall_music, so
+     * raising it buys distortion rather than level.  The digital gain applied
+     * before the AudioTrack write is the one that carries.
+     *
+     * Steps are geometric so a step means the same thing on a profile that
+     * starts at gain 1 and one that starts at 2.
+     */
+    @Volatile var agentVolumeStep: Int = 0
+
+    private val AGENT_GAIN_FACTORS =
+        doubleArrayOf(0.40, 0.55, 0.75, 1.0, 1.4, 2.0, 2.8)
+
+    /** Multiplier the step asks for, 1.0 at step 0. */
+    val agentGainFactor: Double
+        get() = AGENT_GAIN_FACTORS[agentVolumeStep.coerceIn(-3, 3) + 3]
+
     val MUSIC_VOL_PERCENT: Int get() = profile.musicVolPercent
 
     /** Run mixer discovery once on first audio bridge setup. */

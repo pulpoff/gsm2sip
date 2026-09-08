@@ -413,6 +413,34 @@
                         android:paddingHorizontal="14dp"
                         android:paddingBottom="20dp">
 
+                        <ImageView
+                            android:layout_width="72dp"
+                            android:layout_height="72dp"
+                            android:layout_gravity="center_horizontal"
+                            android:layout_marginTop="14dp"
+                            android:src="@mipmap/ic_launcher"
+                            android:contentDescription="gsm2sip" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_horizontal"
+                            android:text="gsm2sip"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_primary"
+                            android:paddingTop="8dp" />
+
+                        <TextView
+                            android:id="@+id/tvCfgVersion"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_horizontal"
+                            android:textSize="12sp"
+                            android:textColor="@color/text_label"
+                            android:paddingTop="2dp"
+                            android:paddingBottom="14dp" />
+
                         <TextView style="@style/CfgLabel" android:text="SIP Server" />
                         <EditText android:id="@+id/etCfgServer" style="@style/CfgField"
                             android:hint="callagent.pro" android:inputType="textUri" />
@@ -480,6 +508,44 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="Offering G.711 alongside G.722 usually means the server picks G.711 and every call is narrowband, which is why G.722 alone is the default."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Agent Volume" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="4dp">
+
+                            <SeekBar
+                                android:id="@+id/sbCfgAgentVolume"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:max="6"
+                                android:progress="3"
+                                android:progressTint="@color/accent"
+                                android:thumbTint="@color/accent" />
+
+                            <TextView
+                                android:id="@+id/tvCfgAgentVolume"
+                                android:layout_width="44dp"
+                                android:layout_height="wrap_content"
+                                android:gravity="end"
+                                android:text="0"
+                                android:textStyle="bold"
+                                android:textColor="@color/text_label"
+                                android:paddingStart="8dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="How loud the agent is to the GSM caller. 0 is what the detected device asks for; each step roughly a third louder or quieter. Raise it if callers say the agent is faint, lower it if the line distorts."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="6dp" />

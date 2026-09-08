@@ -14,6 +14,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.widget.SeekBar
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
@@ -392,6 +393,11 @@ class MainActivity : AppCompatActivity() {
         tabCalls = findViewById(R.id.tabCalls)
         tabSettings = findViewById(R.id.tabSettings)
 
+        // Named and versioned at the top of settings.  It is the first thing
+        // asked for when a change appears not to have taken, and this deploy
+        // path can leave the running build and the file on disk disagreeing.
+        findViewById<TextView>(R.id.tvCfgVersion).text = "v${BuildConfig.VERSION_NAME}"
+
         // Logs view — opened from the Settings header, back returns there
         // rather than to home, so the icon behaves like a drill-down.
         tabLogs = findViewById(R.id.tabLogs)
@@ -533,6 +539,21 @@ class MainActivity : AppCompatActivity() {
                 else -> R.id.rbCodecG722
             }
         ).isChecked = true
+
+        // -3..+3 as a 0..6 slider, so 0 sits in the middle.
+        val agentVol = findViewById<SeekBar>(R.id.sbCfgAgentVolume)
+        val agentVolLabel = findViewById<TextView>(R.id.tvCfgAgentVolume)
+        fun stepText(step: Int) = if (step > 0) "+$step" else step.toString()
+        agentVol.progress = prefs.getInt("agent_vol_step", 0).coerceIn(-3, 3) + 3
+        agentVolLabel.text = stepText(agentVol.progress - 3)
+        agentVol.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+                agentVolLabel.text = stepText(value - 3)
+            }
+            override fun onStartTrackingTouch(bar: SeekBar) {}
+            override fun onStopTrackingTouch(bar: SeekBar) {}
+        })
+
         switchTab("config")
     }
 
@@ -544,6 +565,7 @@ class MainActivity : AppCompatActivity() {
         val own = findViewById<EditText>(R.id.etCfgOwnNumber).text.toString().trim()
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
+        val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
             R.id.rbCodecBoth -> "both"
@@ -563,10 +585,12 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("autoconnect", auto)
             .putBoolean("use_stun", useStun)
             .putString("codec", codec)
+            .putInt("agent_vol_step", agentVolStep)
             .apply()
         appendLog(
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
-                "codec=$codec, stun=${if (useStun) "on" else "off"})"
+                "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
+                    "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )
         Toast.makeText(this, "Saved — reconnecting", Toast.LENGTH_SHORT).show()
         // Apply immediately rather than waiting for the next restart.  This

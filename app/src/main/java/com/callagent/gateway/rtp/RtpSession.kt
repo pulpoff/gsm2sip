@@ -751,7 +751,9 @@ class RtpSession(
     // Audio parameters from device profile
     private val profile get() = GsmCallManager.profile
     private val captureGain get() = profile.captureGain
-    private val playbackGain get() = profile.playbackGain
+    /** The profile's digital gain with the manual trim from settings applied. */
+    private val playbackGain: Double
+        get() = profile.playbackGain * GsmCallManager.agentGainFactor
 
     // Double-talk detection: VOICE_CALL captures uplink+downlink from
     // the modem DSP.  The uplink contains the SIP agent's voice (injected
@@ -1404,11 +1406,12 @@ class RtpSession(
                 // Software gain: boost PCM before writing to AudioTrack.
                 // This increases the digital level injected via incall_music
                 // without changing STREAM_MUSIC volume (which clips at >14%).
-                if (playbackGain > 1) {
+                val gain = playbackGain
+                if (gain != 1.0) {
                     for (i in 0 until pcm.size / 2) {
                         val lo = pcm[i * 2].toInt() and 0xFF
                         val hi = pcm[i * 2 + 1].toInt()
-                        val sample = ((hi shl 8) or lo) * playbackGain
+                        val sample = ((((hi shl 8) or lo) * gain).toInt())
                         val clamped = sample.coerceIn(-32768, 32767)
                         pcm[i * 2] = (clamped and 0xFF).toByte()
                         pcm[i * 2 + 1] = ((clamped shr 8) and 0xFF).toByte()

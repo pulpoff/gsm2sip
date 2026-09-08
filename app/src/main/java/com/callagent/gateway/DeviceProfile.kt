@@ -81,6 +81,7 @@ data class DeviceProfile(
      *  capture is running even though the ones set on MultiMedia1/4/8 stay On. */
     val mixerCaptureCmd: String = "",
 
+
     /** Readback of the handful of controls this SoC's bridge depends on.
      *  Logged before and after [mixerSetupCmd] so a failed setup is visible in
      *  the call log.  The interesting controls are entirely SoC-specific, so
