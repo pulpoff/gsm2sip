@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Font Awesome Free 7 "circle-stop" (CC BY 4.0), converted from
+     node_modules/@fortawesome/fontawesome-free/svgs/solid/circle-stop.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512"
+    android:tint="@color/text_primary">
+    <path
+        android:fillColor="@color/text_primary"
+        android:pathData="M256 512a256 256 0 1 0 0-512 256 256 0 1 0 0 512zM192 160l128 0c17.7 0 32 14.3 32 32l0 128c0 17.7-14.3 32-32 32l-128 0c-17.7 0-32-14.3-32-32l0-128c0-17.7 14.3-32 32-32z" />
+</vector>

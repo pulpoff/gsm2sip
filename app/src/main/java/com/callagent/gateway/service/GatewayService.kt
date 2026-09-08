@@ -840,9 +840,14 @@ class GatewayService : Service() {
     }
 
     private fun broadcastLog(msg: String) {
-        // Buffer for replay when activity resumes (receiver is only active in foreground)
+        // Buffer for replay when activity resumes (receiver is only active in
+        // foreground).  Stamped here, not on replay: the UI used to timestamp
+        // as it appended, so every line buffered while the app was closed —
+        // the whole unattended history, which is the part worth reading —
+        // collapsed onto the moment the app was opened.
+        val stamped = "${bufferTimeFormat.format(java.util.Date())}  $msg"
         synchronized(logBuffer) {
-            logBuffer.add(msg)
+            logBuffer.add(stamped)
             if (logBuffer.size > LOG_BUFFER_SIZE) logBuffer.removeAt(0)
         }
         val intent = Intent(LOG_ACTION).apply {
@@ -989,6 +994,9 @@ class GatewayService : Service() {
         private const val TAG = "GatewayService"
         private const val LOG_BUFFER_SIZE = 200
         /** Ring buffer of recent log messages — survives activity pause/resume. */
+        private val bufferTimeFormat =
+            java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+
         val logBuffer = mutableListOf<String>()
 
         /** Drain buffered logs.  Returns all messages and clears the buffer. */

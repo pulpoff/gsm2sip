@@ -193,6 +193,13 @@ class MainActivity : AppCompatActivity() {
      * Re-arming unconditionally is safe — the pending callback is removed
      * first — and the elapsed time is now real in both cases.
      */
+    /** Keep a call button's icon in step with its label — the two describe
+     *  the same action, so they have to change together. */
+    private fun setCallButtonState(button: Button, label: String, iconRes: Int) {
+        button.text = label
+        button.setCompoundDrawablesRelativeWithIntrinsicBounds(0, iconRes, 0, 0)
+    }
+
     private fun startCallTimer() {
         callStartTime = if (serviceCallStart > 0) serviceCallStart else System.currentTimeMillis()
         callTimerHandler.removeCallbacks(callTimerRunnable)
@@ -403,9 +410,11 @@ class MainActivity : AppCompatActivity() {
         tvLog = findViewById(R.id.tvLog)
         svLog = findViewById(R.id.svLog)
 
-        // Fresh log on every app (re)start — clear both the view and the service buffer
+        // Clear the view, but keep whatever the service has buffered: onResume
+        // drains it into the view a moment later.  Discarding it here threw
+        // away exactly the lines worth reading — the ones from before anyone
+        // opened the app, which is when the gateway runs unattended.
         tvLog.text = ""
-        GatewayService.drainLogBuffer()
         btnStart = findViewById(R.id.btnStart)
         btnCopyLog = findViewById(R.id.btnCopyLog)
         btnConfig = findViewById(R.id.btnConfig)
@@ -577,7 +586,11 @@ class MainActivity : AppCompatActivity() {
             action = GatewayService.ACTION_MUTE_AGENT
             putExtra(GatewayService.EXTRA_MUTE_ON, agentMuted)
         })
-        btnHomeMute.text = if (agentMuted) "Unmute" else "Mute"
+        setCallButtonState(
+            btnHomeMute,
+            if (agentMuted) "Unmute" else "Mute",
+            if (agentMuted) R.drawable.ic_fa_volume_high else R.drawable.ic_fa_volume_xmark
+        )
         appendLog(if (agentMuted) "Agent muted to caller" else "Agent unmuted")
     }
 
@@ -624,7 +637,18 @@ class MainActivity : AppCompatActivity() {
             // Mute is per-call; do not carry it into the next one.
             if (agentMuted) {
                 agentMuted = false
-                if (::btnHomeMute.isInitialized) btnHomeMute.text = "Mute"
+                if (::btnHomeMute.isInitialized) {
+                    setCallButtonState(btnHomeMute, "Mute", R.drawable.ic_fa_volume_xmark)
+                }
+            }
+            // Snoop likewise — the monitor lives with the RTP session and dies
+            // with the call, but the flag was only ever cleared by the old
+            // full-screen in-call view, which nothing opens any more.  So the
+            // button came up saying "Stop" on the next call and the first tap
+            // turned off something that was already off.
+            if (monitoring) {
+                monitoring = false
+                updateMonitorButtons()
             }
             renderHomeTraffic()
         }
@@ -1057,9 +1081,11 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
 
         // Replay any log messages buffered while activity was paused
+        // Already stamped by the service, with the time the event actually
+        // happened — append verbatim rather than re-dating it to now.
         val buffered = GatewayService.drainLogBuffer()
-        for (msg in buffered) {
-            appendLog(msg)
+        for (line in buffered) {
+            appendLogRaw(line)
         }
 
         if (onlineSince > 0) {
@@ -1908,7 +1934,11 @@ class MainActivity : AppCompatActivity() {
             btnInCallMonitor.text = if (monitoring) "STOP LISTENING" else "LISTEN IN"
         }
         if (::btnHomeSnoop.isInitialized) {
-            btnHomeSnoop.text = if (monitoring) "Stop" else "Snoop"
+            setCallButtonState(
+                btnHomeSnoop,
+                if (monitoring) "Stop" else "Snoop",
+                if (monitoring) R.drawable.ic_fa_circle_stop else R.drawable.ic_fa_headphones
+            )
         }
         if (::btnSnoop.isInitialized) {
             btnSnoop.text = if (monitoring) "STOP" else "SNOOP"
@@ -2044,9 +2074,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun appendLog(msg: String) {
-        val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        appendLogRaw("${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())}  $msg")
+    }
+
+    /** Append a line that already carries its own timestamp. */
+    private fun appendLogRaw(line: String) {
         runOnUiThread {
-            tvLog.append("$ts  $msg\n")
+            tvLog.append("$line\n")
             svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }

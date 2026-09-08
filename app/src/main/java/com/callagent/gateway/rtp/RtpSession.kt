@@ -876,12 +876,13 @@ class RtpSession(
                                 // AudioRecord down here and blacklisting the
                                 // source was catastrophic mid-call: with
                                 // playbackLeaksIntoCapture off every quiet
-                                // frame counts, so ${SILENCE_FRAME_LIMIT / 50}s
-                                // of nobody speaking retired a working source.
-                                // A few of those exhausted the source list and
-                                // capture stayed dead for the rest of the call
-                                // — the agent stopped hearing the caller and
-                                // never got them back.
+                                // frame counts, so one limit's worth of nobody
+                                // speaking — six seconds on this profile —
+                                // retired a working source.  A few of those
+                                // exhausted the source list and capture stayed
+                                // dead for the rest of the call: the agent
+                                // stopped hearing the caller and never got
+                                // them back.
                                 val now = System.currentTimeMillis()
                                 if (now - lastDeadAirLog > 30_000) {
                                     lastDeadAirLog = now
