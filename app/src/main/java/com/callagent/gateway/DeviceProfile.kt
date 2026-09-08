@@ -460,12 +460,53 @@ data class DeviceProfile(
             // full set is harmless; VOICE_SESSION (10c01000) is the one an
             // MSM8930-era HAL would actually use.
             halCallActiveVsids = listOf("10c01000", "10dc1000", "11c05000"),
+            // Calibrated, not arbitrary: above roughly this the injected
+            // stream clips.  Raising it to index 5/15 was tried on a live call
+            // and made no audible difference at the far end — the incall_music
+            // path does not take its level from the STREAM_MUSIC index — so
+            // loudness has to come from playbackGain or the agent itself.
             musicVolPercent = 14,
-            captureGain = 2,
+            // Capture is relayed unaltered — the modem's level is already
+            // healthy and sm6150 does the same.  Playback keeps a x2: the far
+            // end reported the agent as quiet without it, and the STREAM_MUSIC
+            // index turned out not to drive the incall_music level at all, so
+            // this is the only lever left short of raising the agent itself.
+            captureGain = 1,
             playbackGain = 2,
-            noiseGateThreshold = 500,
+            // Measured on live calls: the modem's silence floor sits at
+            // rawCapRMS 6-174, while speech runs 471-4132.  At 500 the gate was
+            // biting into speech — a frame at 471 was zeroed outright — and the
+            // hard on/off at the threshold was audible as chatter at the starts
+            // and ends of words.  100 keeps the gate almost entirely out of the
+            // way, at the cost of relaying some of the modem's own hiss.
+            noiseGateThreshold = 100,
             echoGateThreshold = 300,
             doubleTalkRatio = 1.5f,
+            // Nothing to cancel: capture is AudioSource.VOICE_CALL straight off
+            // the modem and playback is injected digitally through
+            // incall_music, so the handset's speaker and microphone are not in
+            // the path and playback cannot reach the capture side.  Left on
+            // (the default) the echo gate and double-talk logic ran on every
+            // frame and did nothing but discard the caller whenever the agent
+            // spoke — the counters bore this out, gates:echo climbing steadily
+            // through a call where no acoustic echo was possible.
+            playbackLeaksIntoCapture = false,
+            // AudioSource.VOICE_CALL is uplink AND downlink mixed, and the
+            // uplink is where incall_music injects the agent — so the agent's
+            // own voice came straight back to it as if the caller had spoken,
+            // and its barge-in detector cut every phrase in half while the
+            // caller was silent.  Confirmed from the server's recordings.
+            //
+            // Downlink alone is the caller.  These are the two front-end
+            // switches the HAL's incall-rec paths use, and they have to be set
+            // after startRecording(): opening the capture stream reprograms
+            // that front-end, discarding anything written earlier.
+            mixerCaptureCmd = buildString {
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("echo -n 'VOC_REC_DL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'VOC_REC_UL='; tinymix 'MultiMedia1 Mixer VOC_REC_UL' 2>&1")
+            },
             requireSpeakerMode = true,
             incallMusicParam = "incall_music_enabled",
             voiceDownlinkWorks = false,
