@@ -309,6 +309,34 @@ object SipBuilder {
         append(body)
     }
 
+    /**
+     * A bare status response for a page-mode request.
+     *
+     * 202 for a MESSAGE we have taken responsibility for, 4xx to refuse one.
+     * No Contact: there is no dialog to route anything into.
+     */
+    fun statusResponse(
+        msg: SipMessage,
+        code: Int,
+        reason: String,
+        extraHeaders: List<String> = emptyList(),
+        toTag: String = tag()
+    ): String {
+        val to = msg.to ?: ""
+        val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
+        return buildString {
+            append("SIP/2.0 $code $reason\r\n")
+            append("Via: ${msg.via}\r\n")
+            append("To: $toWithTag\r\n")
+            append("From: ${msg.from}\r\n")
+            append("Call-ID: ${msg.callId}\r\n")
+            append("CSeq: ${msg.cseq}\r\n")
+            append("User-Agent: $userAgent\r\n")
+            for (h in extraHeaders) append("$h\r\n")
+            append("Content-Length: 0\r\n\r\n")
+        }
+    }
+
     fun ok200(
         msg: SipMessage,
         username: String, localIp: String, localPort: Int,

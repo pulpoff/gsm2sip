@@ -45,6 +45,7 @@
          (and with it the default-SMS-app role) is only needed to *store* them,
          which a gateway has no reason to do. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -126,6 +127,18 @@
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="999">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Sent and delivery callbacks for outbound SMS.  In the manifest,
+             not registered at runtime: a delivery report can arrive long after
+             the send, by which time the process may have been restarted. -->
+        <receiver
+            android:name=".sms.SmsSendReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.callagent.gateway.SMS_SENT" />
+                <action android:name="com.callagent.gateway.SMS_DELIVERED" />
             </intent-filter>
         </receiver>
 

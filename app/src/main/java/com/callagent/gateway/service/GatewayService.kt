@@ -18,7 +18,10 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.telephony.TelephonyManager
+import com.callagent.gateway.sms.OutboundSms
 import com.callagent.gateway.sms.PendingSms
+import com.callagent.gateway.sms.SmsOutbox
+import com.callagent.gateway.sms.SmsSender
 import com.callagent.gateway.sms.SmsStore
 import android.util.Log
 import com.callagent.gateway.BuildConfig
@@ -301,25 +304,33 @@ class GatewayService : Service() {
      * perfectly while quietly dropping every message.
      */
     private fun checkSmsPermission() {
-        val queued = SmsStore.pending(this).size
-        if (hasReceiveSms()) {
-            broadcastLog("SMS receive: ready${if (queued > 0) " ($queued queued)" else ""}")
-            return
-        }
         // Self-heal with root, the way RECORD_AUDIO's appop is forced.  The
         // Magisk module's grant loop runs before PackageManager is up, so a
         // newly added permission never takes there — and the failure is
-        // invisible: the broadcast simply never arrives.
-        broadcastLog("RECEIVE_SMS not granted — granting via root")
-        try {
-            RootShell.exec("pm grant $packageName android.permission.RECEIVE_SMS", 8000)
-        } catch (e: Exception) {
-            Log.w(TAG, "pm grant RECEIVE_SMS failed: ${e.message}")
-        }
+        // invisible: incoming SMS is simply never delivered, outgoing is
+        // refused.
+        if (!hasReceiveSms()) grantViaRoot("android.permission.RECEIVE_SMS")
+        if (!hasSendSms()) grantViaRoot("android.permission.SEND_SMS")
+
+        val queued = SmsStore.pending(this).size
         if (hasReceiveSms()) {
             broadcastLog("SMS receive: ready${if (queued > 0) " ($queued queued)" else ""}")
         } else {
-            broadcastLog("WARNING: RECEIVE_SMS still not granted — incoming SMS will be dropped")
+            broadcastLog("WARNING: RECEIVE_SMS not granted — incoming SMS will be dropped")
+        }
+        if (hasSendSms()) {
+            broadcastLog("SMS send: ready")
+        } else {
+            broadcastLog("WARNING: SEND_SMS not granted — send requests will be refused")
+        }
+    }
+
+    private fun grantViaRoot(permission: String) {
+        broadcastLog("$permission not granted — granting via root")
+        try {
+            RootShell.exec("pm grant $packageName $permission", 8000)
+        } catch (e: Exception) {
+            Log.w(TAG, "pm grant $permission failed: ${e.message}")
         }
     }
 
@@ -364,6 +375,14 @@ class GatewayService : Service() {
                 }
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
+            ACTION_SMS_SEND -> {
+                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                dispatchOutbox()
+            }
+            ACTION_SMS_REPORT -> {
+                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                reportOutbox(intent.getStringExtra(EXTRA_SMS_ID))
+            }
             ACTION_SMS_FLUSH -> {
                 // Started with startForegroundService() from the SMS receiver,
                 // so the foreground promise has to be honoured — with the
@@ -494,7 +513,9 @@ class GatewayService : Service() {
             } finally {
                 smsRetryScheduled = false
             }
-            if (!stopped) flushSmsQueue("retry")
+            if (stopped) return@thread
+            flushSmsQueue("retry")
+            sweepOutboxReports()
         }
     }
 
@@ -527,6 +548,205 @@ class GatewayService : Service() {
             body = sms.text,
             extraHeaders = headers
         )
+    }
+
+    // ── SIP → SMS ───────────────────────────────────────
+
+    /**
+     * A MESSAGE from the server asking us to send an SMS.
+     *
+     * Runs on the SIP receive thread, so it does nothing slow: the request is
+     * validated, written to the outbox and answered.  Answering 202 is a
+     * promise that the message is now ours to deliver and report on, so
+     * nothing is answered 202 until it is safely on disk.
+     */
+    fun onSmsSendRequest(msg: com.callagent.gateway.sip.SipMessage): Int {
+        val type = msg.contentType?.lowercase().orEmpty()
+        if (type.isNotEmpty() && !type.startsWith("text/plain")) {
+            broadcastLog("SMS send refused: unsupported Content-Type '$type'")
+            return 415
+        }
+        val target = (msg.header("x-sms-to")
+            ?: msg.requestUri?.let { msg.extractUser(it) }
+            ?: msg.to?.let { msg.extractUser(it) })
+            ?.trim().orEmpty()
+        val text = msg.body
+        if (target.isEmpty() || text.isEmpty()) {
+            broadcastLog("SMS send refused: missing recipient or body")
+            return 400
+        }
+        if (!hasSendSms()) {
+            // 503 rather than 4xx: the server should try this one again once
+            // the permission is in place, not give up on it.
+            broadcastLog("SMS send refused: SEND_SMS not granted")
+            return 503
+        }
+
+        val id = msg.header("x-sms-id")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: SmsStore.newId()
+        val existing = SmsOutbox.get(this, id)
+        if (existing != null) {
+            // The server repeated a request whose response it did not see.
+            broadcastLog("SMS send: $id already accepted — not sending twice")
+            return 202
+        }
+
+        val subId = resolveSubscription(
+            msg.header("x-sms-sim-sub")?.trim()?.toIntOrNull(),
+            msg.header("x-sms-sim-slot")?.trim()?.toIntOrNull()
+        )
+        SmsOutbox.add(this, OutboundSms(id = id, to = target, text = text, subId = subId))
+        broadcastLog("SMS send: $id to $target accepted (${text.length} chars, sub=$subId)")
+
+        val intent = Intent(this, GatewayService::class.java).apply { action = ACTION_SMS_SEND }
+        try {
+            startForegroundService(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not schedule SMS dispatch: ${e.message}")
+        }
+        return 202
+    }
+
+    /** Which SIM to send from: an explicit subscription wins, then a slot, then
+     *  whatever the platform considers default. */
+    private fun resolveSubscription(subId: Int?, slot: Int?): Int {
+        if (subId != null && subId >= 0) return subId
+        if (slot != null && slot >= 0) {
+            try {
+                val sm = getSystemService(android.telephony.SubscriptionManager::class.java)
+                @Suppress("MissingPermission")
+                val info = sm?.activeSubscriptionInfoList?.firstOrNull { it.simSlotIndex == slot }
+                if (info != null) return info.subscriptionId
+                broadcastLog("SMS send: no active SIM in slot $slot — using default")
+            } catch (e: Exception) {
+                Log.w(TAG, "Slot lookup failed: ${e.message}")
+            }
+        }
+        return android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID
+    }
+
+    private fun hasSendSms(): Boolean =
+        checkSelfPermission(android.Manifest.permission.SEND_SMS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Hand anything not yet given to the modem to the modem. */
+    private fun dispatchOutbox() {
+        thread(name = "sms-dispatch") {
+            for (sms in SmsOutbox.all(this)) {
+                if (sms.dispatched) continue
+                if (!SmsSender.dispatch(this, sms)) {
+                    // Nothing will call back; say so now rather than leaving
+                    // the server waiting for a report that cannot come.
+                    reportOutbox(sms.id)
+                }
+            }
+        }
+    }
+
+    /**
+     * Tell the server what has become of a message.
+     *
+     * Two reports at most: one when the network has taken it (or refused it),
+     * and one when the delivery report arrives.  Carriers that do not return
+     * status reports simply never produce the second, which is why the first
+     * is not held back waiting for it.
+     */
+    /** Re-report anything the server has not acknowledged yet.  A report that
+     *  was refused or lost is no less true for it. */
+    private fun sweepOutboxReports() {
+        thread(name = "sms-report-sweep") {
+            for (sms in SmsOutbox.all(this)) {
+                if (sms.finalReported) continue
+                reportOutboxNow(sms.id)
+            }
+            SmsOutbox.prune(this)
+        }
+    }
+
+    private fun reportOutbox(id: String?) {
+        if (id == null) return
+        thread(name = "sms-report") { reportOutboxNow(id) }
+    }
+
+    private fun reportOutboxNow(id: String) {
+        run {
+            val sms = SmsOutbox.get(this, id) ?: return
+            val parts = maxOf(sms.parts, 1)
+            val sentDone = sms.sentOk + sms.sentFailed >= parts
+            val deliveryDone = sms.deliveredOk + sms.deliveredFailed >= parts
+
+            if (sentDone && !sms.submitReported) {
+                val failed = sms.sentFailed > 0
+                if (sendSmsReport(sms, if (failed) "failed" else "submitted")) {
+                    SmsOutbox.update(this, id) {
+                        // A failed send is terminal: no delivery report follows.
+                        it.copy(submitReported = true, finalReported = failed)
+                    }
+                } else {
+                    scheduleSmsRetry()
+                }
+            }
+            val current = SmsOutbox.get(this, id) ?: return
+            if (deliveryDone && current.submitReported && !current.finalReported) {
+                val event = if (current.deliveredFailed > 0) "undelivered" else "delivered"
+                if (sendSmsReport(current, event)) {
+                    SmsOutbox.update(this, id) { it.copy(finalReported = true) }
+                } else {
+                    scheduleSmsRetry()
+                }
+            }
+            SmsOutbox.prune(this)
+        }
+    }
+
+    /** One report, as a SIP MESSAGE with a JSON body. */
+    private fun sendSmsReport(sms: OutboundSms, event: String): Boolean {
+        val sip = sipClient
+        if (sip == null || !sip.registered) {
+            broadcastLog("SMS report $event for ${sms.id} deferred — not registered")
+            return false
+        }
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val own = prefs.getString("own_number", "")?.trim().orEmpty().ifEmpty { cfgUser }
+        val body = org.json.JSONObject().apply {
+            put("id", sms.id)
+            put("event", event)
+            put("to", sms.to)
+            put("parts", maxOf(sms.parts, 1))
+            put("sentOk", sms.sentOk)
+            put("sentFailed", sms.sentFailed)
+            put("deliveredOk", sms.deliveredOk)
+            put("deliveredFailed", sms.deliveredFailed)
+            if (sms.lastError.isNotEmpty()) put("reason", sms.lastError)
+            put("at", smsTimeFormat.format(java.util.Date()))
+        }.toString()
+
+        val headers = mutableListOf(
+            "X-SMS-Id: ${sms.id}",
+            "X-SMS-Event: $event",
+            "X-SMS-To: ${sms.to}",
+            "X-SMS-Parts: ${maxOf(sms.parts, 1)}",
+            "X-SMS-At: ${smsTimeFormat.format(java.util.Date())}"
+        )
+        if (sms.lastError.isNotEmpty()) headers += "X-SMS-Reason: ${sms.lastError}"
+
+        // text/plain, not application/json: chan_sip refuses anything else on
+        // an out-of-call MESSAGE — measured, it answered 415.  The body is
+        // still JSON for anyone who wants to parse it, but every field is in
+        // an X-SMS-* header too, so SIP_HEADER() alone is enough.
+        val code = sip.sendSipMessage(
+            targetUri = "sip:$own@$cfgServer",
+            fromUser = own,
+            body = body,
+            extraHeaders = headers,
+            contentType = "text/plain;charset=UTF-8"
+        )
+        val ok = code == 200 || code == 202
+        broadcastLog(
+            "SMS report $event for ${sms.id}: " +
+                if (ok) "acknowledged" else "not acknowledged (${if (code == 0) "no response" else code})"
+        )
+        return ok
     }
 
     private fun dialFromDialler(intent: Intent?) {
@@ -753,8 +973,10 @@ class GatewayService : Service() {
                 // Track online time
                 if (registered && onlineSince == 0L) {
                     onlineSince = System.currentTimeMillis()
-                    // Anything that arrived while SIP was down goes now.
+                    // Anything that arrived while SIP was down goes now, and
+                    // any report the server never acknowledged goes again.
                     flushSmsQueue("registered")
+                    sweepOutboxReports()
                 } else if (!registered && state == CallOrchestrator.BridgeState.IDLE) {
                     onlineSince = 0L
                 }
@@ -826,6 +1048,7 @@ class GatewayService : Service() {
         orch.start()
 
         sip.logListener = { msg -> broadcastLog("SIP: $msg") }
+        sip.onSmsRequest = { m -> onSmsSendRequest(m) }
         GsmCallManager.logCallback = { msg -> broadcastLog("AUDIO: $msg") }
         sip.onConnectionLost = { reconnect() }
 
@@ -1196,6 +1419,9 @@ class GatewayService : Service() {
         const val LOG_ACTION = "com.callagent.gateway.LOG"
         const val ACTION_APPLY_CONFIG = "com.callagent.gateway.APPLY_CONFIG"
         const val ACTION_SMS_FLUSH = "com.callagent.gateway.SMS_FLUSH"
+        const val ACTION_SMS_SEND = "com.callagent.gateway.SMS_SEND"
+        const val ACTION_SMS_REPORT = "com.callagent.gateway.SMS_REPORT"
+        const val EXTRA_SMS_ID = "sms_id"
 
         /** How long to wait before retrying a message the server did not take. */
         private const val SMS_RETRY_MS = 30_000L
@@ -1214,6 +1440,20 @@ class GatewayService : Service() {
          * disk — so if the service is not up, or is killed on the way, nothing
          * is lost: the queue is flushed again as soon as SIP registers.
          */
+        /** A send result or delivery report landed — let the service tell the
+         *  server about it. */
+        fun reportSmsProgress(context: Context, id: String) {
+            val intent = Intent(context, GatewayService::class.java).apply {
+                action = ACTION_SMS_REPORT
+                putExtra(EXTRA_SMS_ID, id)
+            }
+            try {
+                context.startForegroundService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not wake gateway for SMS report: ${e.message}")
+            }
+        }
+
         fun deliverQueuedSms(context: Context) {
             val intent = Intent(context, GatewayService::class.java).apply {
                 action = ACTION_SMS_FLUSH

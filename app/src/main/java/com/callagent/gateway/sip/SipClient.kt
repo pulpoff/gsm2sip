@@ -58,6 +58,16 @@ class SipClient(
     /** Log callback — forwards key SIP events to the UI */
     @Volatile var logListener: ((String) -> Unit)? = null
 
+    /**
+     * Page-mode MESSAGE from the server — a request to send an SMS.
+     *
+     * Returns the status to answer with: 202 once the request is safely
+     * stored, or a 4xx the server should not retry.  Kept off SipClient's
+     * Listener, which is about calls, and invoked on the receive thread — so
+     * whatever it does must be quick.
+     */
+    @Volatile var onSmsRequest: ((SipMessage) -> Int)? = null
+
     private fun uiLog(msg: String) {
         Log.i(TAG, msg)
         logListener?.invoke(msg)
@@ -247,6 +257,28 @@ class SipClient(
                 }
                 return
             }
+        }
+
+        // Page-mode MESSAGE from the server — an SMS to send.
+        if (msg.isRequest && msg.method == "MESSAGE") {
+            val code = try {
+                onSmsRequest?.invoke(msg) ?: 405
+            } catch (e: Exception) {
+                Log.e(TAG, "onIncomingMessage failed: ${e.message}", e)
+                500
+            }
+            val reason = when (code) {
+                200 -> "OK"
+                202 -> "Accepted"
+                400 -> "Bad Request"
+                405 -> "Method Not Allowed"
+                404 -> "Not Found"
+                415 -> "Unsupported Media Type"
+                503 -> "Service Unavailable"
+                else -> "Error"
+            }
+            sendTo(SipBuilder.statusResponse(msg, code, reason), address)
+            return
         }
 
         // New INVITE

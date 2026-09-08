@@ -50,6 +50,7 @@ for PERM in \
     android.permission.READ_PHONE_NUMBERS \
     android.permission.READ_CALL_LOG \
     android.permission.RECEIVE_SMS \
+    android.permission.SEND_SMS \
     android.permission.ACCESS_FINE_LOCATION \
     android.permission.ACCESS_COARSE_LOCATION \
     android.permission.CALL_PHONE \
