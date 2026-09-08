@@ -11,8 +11,8 @@ android {
         applicationId = "com.callagent.gateway"
         minSdk = 26
         targetSdk = 34
-        versionCode = 346
-        versionName = "2.8.68"
+        versionCode = 349
+        versionName = "2.8.71"
     }
 
     buildTypes {

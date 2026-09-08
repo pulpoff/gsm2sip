@@ -18,6 +18,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.telephony.TelephonyManager
+import com.callagent.gateway.sms.PendingSms
+import com.callagent.gateway.sms.SmsStore
 import android.util.Log
 import com.callagent.gateway.BuildConfig
 import com.callagent.gateway.GatewayApp
@@ -291,6 +293,40 @@ class GatewayService : Service() {
         }
     }
 
+    /**
+     * Report whether incoming SMS can reach us at all.
+     *
+     * Without RECEIVE_SMS the broadcast is simply never delivered — no error,
+     * no receiver call, nothing to notice — so the gateway would forward calls
+     * perfectly while quietly dropping every message.
+     */
+    private fun checkSmsPermission() {
+        val queued = SmsStore.pending(this).size
+        if (hasReceiveSms()) {
+            broadcastLog("SMS receive: ready${if (queued > 0) " ($queued queued)" else ""}")
+            return
+        }
+        // Self-heal with root, the way RECORD_AUDIO's appop is forced.  The
+        // Magisk module's grant loop runs before PackageManager is up, so a
+        // newly added permission never takes there — and the failure is
+        // invisible: the broadcast simply never arrives.
+        broadcastLog("RECEIVE_SMS not granted — granting via root")
+        try {
+            RootShell.exec("pm grant $packageName android.permission.RECEIVE_SMS", 8000)
+        } catch (e: Exception) {
+            Log.w(TAG, "pm grant RECEIVE_SMS failed: ${e.message}")
+        }
+        if (hasReceiveSms()) {
+            broadcastLog("SMS receive: ready${if (queued > 0) " ($queued queued)" else ""}")
+        } else {
+            broadcastLog("WARNING: RECEIVE_SMS still not granted — incoming SMS will be dropped")
+        }
+    }
+
+    private fun hasReceiveSms(): Boolean =
+        checkSelfPermission(android.Manifest.permission.RECEIVE_SMS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     /** Release the init flag if it has been held implausibly long. */
     private fun clearStaleInitializing() {
         if (initializing.get() &&
@@ -328,6 +364,13 @@ class GatewayService : Service() {
                 }
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
+            ACTION_SMS_FLUSH -> {
+                // Started with startForegroundService() from the SMS receiver,
+                // so the foreground promise has to be honoured — with the
+                // notification it already has, not a new one.
+                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                flushSmsQueue("received")
+            }
             ACTION_DIAL -> dialFromDialler(intent)
             ACTION_MUTE_AGENT -> {
                 agentMuted = if (intent.hasExtra(EXTRA_MUTE_ON)) {
@@ -384,6 +427,106 @@ class GatewayService : Service() {
         stopped = false
         initializing.set(false)
         reconnect()
+    }
+
+    // ── Received SMS → SIP ──────────────────────────────
+
+    /** One flush at a time: arrival, registration and the retry timer can all
+     *  fire at once, and sending the same message twice is worse than late. */
+    private val smsFlushing = AtomicBoolean(false)
+    @Volatile private var smsRetryScheduled = false
+
+    /**
+     * Hand every queued SMS to the server over the registration that is
+     * already up, oldest first.
+     *
+     * A message leaves the queue only on a 2xx.  Anything else — no response,
+     * a 4xx, SIP not registered — leaves it on disk for the next attempt,
+     * because the broadcast that delivered it is not repeatable.
+     */
+    private fun flushSmsQueue(reason: String) {
+        if (!smsFlushing.compareAndSet(false, true)) return
+        thread(name = "sms-flush") {
+            try {
+                val queue = SmsStore.pending(this)
+                if (queue.isEmpty()) return@thread
+                val sip = sipClient
+                if (sip == null || !sip.registered) {
+                    broadcastLog("SMS: ${queue.size} queued, waiting for registration")
+                    scheduleSmsRetry()
+                    return@thread
+                }
+                broadcastLog("SMS: forwarding ${queue.size} message(s) [$reason]")
+                var failed = false
+                for (sms in queue) {
+                    val code = sendSmsOverSip(sip, sms)
+                    if (code == 200 || code == 202) {
+                        SmsStore.remove(this, sms.id)
+                        broadcastLog("SMS: ${sms.id} from ${sms.from} accepted ($code)")
+                    } else {
+                        SmsStore.markAttempt(this, sms.id)
+                        broadcastLog(
+                            "SMS: ${sms.id} from ${sms.from} not accepted " +
+                                "(${if (code == 0) "no response" else code.toString()}) — queued"
+                        )
+                        failed = true
+                        break   // keep order; a later one is no more likely to land
+                    }
+                }
+                if (failed) scheduleSmsRetry()
+            } catch (e: Exception) {
+                Log.e(TAG, "SMS flush failed: ${e.message}", e)
+                scheduleSmsRetry()
+            } finally {
+                smsFlushing.set(false)
+            }
+        }
+    }
+
+    private fun scheduleSmsRetry() {
+        if (smsRetryScheduled) return
+        smsRetryScheduled = true
+        thread(name = "sms-retry") {
+            try {
+                Thread.sleep(SMS_RETRY_MS)
+            } catch (_: InterruptedException) {
+                return@thread
+            } finally {
+                smsRetryScheduled = false
+            }
+            if (!stopped) flushSmsQueue("retry")
+        }
+    }
+
+    /**
+     * The wire format, in one place so it can be read against the server's
+     * dialplan.  Request-URI addresses the SIM's own number where the SIM
+     * reports one, falling back to the configured own number and then to the
+     * SIP account — the same routing key an inbound *call* uses, so the server
+     * can map an SMS to an assistant exactly as it maps a call.
+     */
+    private fun sendSmsOverSip(sip: SipClient, sms: PendingSms): Int {
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val configuredOwn = prefs.getString("own_number", "")?.trim().orEmpty()
+        val target = sms.to.ifEmpty { configuredOwn }.ifEmpty { cfgUser }
+        val targetUri = "sip:$target@$cfgServer"
+        val headers = mutableListOf(
+            "X-SMS-Id: ${sms.id}",
+            "X-SMS-From: ${sms.from}",
+            "X-SMS-To: $target",
+            "X-SMS-Received: ${smsTimeFormat.format(java.util.Date(sms.receivedAt))}",
+            "X-SMS-Parts: ${sms.parts}"
+        )
+        if (sms.subId >= 0) headers += "X-SMS-Sim-Sub: ${sms.subId}"
+        if (sms.slot >= 0) headers += "X-SMS-Sim-Slot: ${sms.slot}"
+        if (sms.carrier.isNotEmpty()) headers += "X-SMS-Sim-Carrier: ${sms.carrier}"
+        if (sms.attempts > 0) headers += "X-SMS-Attempt: ${sms.attempts + 1}"
+        return sip.sendSipMessage(
+            targetUri = targetUri,
+            fromUser = sms.from.ifEmpty { "unknown" },
+            body = sms.text,
+            extraHeaders = headers
+        )
     }
 
     private fun dialFromDialler(intent: Intent?) {
@@ -552,6 +695,7 @@ class GatewayService : Service() {
         }
 
         checkDefaultDialer()
+        checkSmsPermission()
 
         val localIp = getLocalIp()
         currentLocalIp = localIp
@@ -609,6 +753,8 @@ class GatewayService : Service() {
                 // Track online time
                 if (registered && onlineSince == 0L) {
                     onlineSince = System.currentTimeMillis()
+                    // Anything that arrived while SIP was down goes now.
+                    flushSmsQueue("registered")
                 } else if (!registered && state == CallOrchestrator.BridgeState.IDLE) {
                     onlineSince = 0L
                 }
@@ -744,6 +890,9 @@ class GatewayService : Service() {
 
     /** Current notification status text, kept in sync with bridge/SIP state. */
     private var notifStatusText = "Connecting"
+    /** Last state the notification was built with, so re-entering the
+     *  foreground for an SMS does not rewrite what the user sees. */
+    @Volatile private var notifState = NotifState.WARN
 
     private fun buildNotification(state: NotifState = NotifState.ERROR, statusText: String = notifStatusText): Notification {
         val intent = Intent(this, MainActivity::class.java)
@@ -787,6 +936,7 @@ class GatewayService : Service() {
 
     private fun updateNotification(state: NotifState = NotifState.ERROR, statusText: String? = null) {
         if (statusText != null) notifStatusText = statusText
+        notifState = state
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(state))
     }
@@ -1030,6 +1180,35 @@ class GatewayService : Service() {
         const val STATUS_ACTION = "com.callagent.gateway.STATUS"
         const val LOG_ACTION = "com.callagent.gateway.LOG"
         const val ACTION_APPLY_CONFIG = "com.callagent.gateway.APPLY_CONFIG"
+        const val ACTION_SMS_FLUSH = "com.callagent.gateway.SMS_FLUSH"
+
+        /** How long to wait before retrying a message the server did not take. */
+        private const val SMS_RETRY_MS = 30_000L
+
+        /** X-SMS-Received: ISO 8601 UTC, so the server does not have to guess
+         *  at the gateway's local time zone. */
+        private val smsTimeFormat =
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+
+        /**
+         * Ask the running gateway to forward whatever SMS are queued.
+         *
+         * Called from the SMS receiver, which has already put the message on
+         * disk — so if the service is not up, or is killed on the way, nothing
+         * is lost: the queue is flushed again as soon as SIP registers.
+         */
+        fun deliverQueuedSms(context: Context) {
+            val intent = Intent(context, GatewayService::class.java).apply {
+                action = ACTION_SMS_FLUSH
+            }
+            try {
+                context.startForegroundService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not wake gateway for SMS: ${e.message}")
+            }
+        }
 
         fun start(context: Context, server: String, port: Int, user: String, pass: String) {
             val intent = Intent(context, GatewayService::class.java).apply {

@@ -275,6 +275,40 @@ object SipBuilder {
         }
     }
 
+    /**
+     * A page-mode SIP MESSAGE (RFC 3428) — one request, one response, no
+     * dialog.  Used to hand a received SMS to the server.
+     *
+     * Content-Length counts *bytes*: SMS text is UTF-8 and a message with any
+     * non-ASCII character in it would otherwise declare a length shorter than
+     * what goes on the wire, and the server would truncate the body.
+     */
+    fun message(
+        targetUri: String,
+        fromUser: String, domain: String,
+        localIp: String, localPort: Int,
+        callId: String, cseq: Int,
+        body: String,
+        contentType: String = "text/plain;charset=UTF-8",
+        extraHeaders: List<String> = emptyList(),
+        fromTag: String = tag(),
+        auth: String? = null
+    ): String = buildString {
+        append("MESSAGE $targetUri SIP/2.0\r\n")
+        append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Max-Forwards: 70\r\n")
+        append("User-Agent: $userAgent\r\n")
+        append("To: <$targetUri>\r\n")
+        append("From: <sip:$fromUser@$domain>;tag=$fromTag\r\n")
+        append("Call-ID: $callId\r\n")
+        append("CSeq: $cseq MESSAGE\r\n")
+        for (h in extraHeaders) append("$h\r\n")
+        if (auth != null) append(auth)
+        append("Content-Type: $contentType\r\n")
+        append("Content-Length: ${body.toByteArray(Charsets.UTF_8).size}\r\n\r\n")
+        append(body)
+    }
+
     fun ok200(
         msg: SipMessage,
         username: String, localIp: String, localPort: Int,

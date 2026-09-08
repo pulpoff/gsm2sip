@@ -215,6 +215,13 @@ class SipClient(
             return
         }
 
+        // Responses to a MESSAGE we sent (an SMS handed to the server).
+        // Checked before call routing: a page-mode MESSAGE has no dialog, so
+        // its Call-ID must not be mistaken for a call's.
+        if (msg.isResponse && msg.cseq?.contains("MESSAGE") == true) {
+            if (handleMessageResponse(msg)) return
+        }
+
         // OPTIONS response (for our keepalive) — update server liveness tracker
         if (msg.isResponse && msg.cseq?.contains("OPTIONS") == true) {
             lastServerResponseTime = System.currentTimeMillis()
@@ -481,6 +488,95 @@ class SipClient(
         return call
     }
 
+    // ── Page-mode MESSAGE (RFC 3428) ────────────────────
+
+    /** One in-flight outbound MESSAGE, keyed by Call-ID. */
+    private class MessageTxn {
+        val latch = CountDownLatch(1)
+        @Volatile var status = 0
+        @Volatile var challenge: SipAuth.AuthParams? = null
+    }
+
+    private val pendingMessages = ConcurrentHashMap<String, MessageTxn>()
+
+    /**
+     * Send a SIP MESSAGE and wait for its final response.
+     *
+     * Blocking, so call it off the main thread.  Returns the status code the
+     * server answered with (202 and 200 both mean accepted), or 0 if nothing
+     * came back — the caller keeps the message queued and tries again rather
+     * than dropping it.
+     *
+     * A 401/407 challenge is answered once with credentials, the way REGISTER
+     * and INVITE are: Asterisk may or may not require auth on MESSAGE
+     * depending on how the endpoint is configured, and guessing wrong in
+     * either direction loses messages.
+     */
+    fun sendSipMessage(
+        targetUri: String,
+        fromUser: String,
+        body: String,
+        extraHeaders: List<String> = emptyList(),
+        contentType: String = "text/plain;charset=UTF-8"
+    ): Int {
+        if (!running.get()) return 0
+        val callId = "${System.currentTimeMillis()}msg@$publicIp"
+        val fromTag = "gw${(100000000..999999999).random()}"
+        val txn = MessageTxn()
+        pendingMessages[callId] = txn
+        try {
+            var cseq = 1
+            sendTo(
+                SipBuilder.message(
+                    targetUri, fromUser, serverDomain, publicIp, localPort,
+                    callId, cseq, body, contentType, extraHeaders, fromTag
+                ),
+                serverAddress
+            )
+            if (!txn.latch.await(MESSAGE_TIMEOUT_SEC, TimeUnit.SECONDS)) return 0
+
+            val challenge = txn.challenge
+            if (challenge != null) {
+                // Same transaction identity, next CSeq — a fresh Call-ID would
+                // read as an unrelated message to the server.
+                val retry = MessageTxn()
+                pendingMessages[callId] = retry
+                cseq++
+                val auth = SipAuth.buildAuthHeader(
+                    "MESSAGE", targetUri, username, password, challenge
+                )
+                sendTo(
+                    SipBuilder.message(
+                        targetUri, fromUser, serverDomain, publicIp, localPort,
+                        callId, cseq, body, contentType, extraHeaders, fromTag, auth
+                    ),
+                    serverAddress
+                )
+                if (!retry.latch.await(MESSAGE_TIMEOUT_SEC, TimeUnit.SECONDS)) return 0
+                return retry.status
+            }
+            return txn.status
+        } catch (e: Exception) {
+            uiLog("SIP MESSAGE failed: ${e.message}")
+            return 0
+        } finally {
+            pendingMessages.remove(callId)
+        }
+    }
+
+    private fun handleMessageResponse(msg: SipMessage): Boolean {
+        val callId = msg.callId ?: return false
+        val txn = pendingMessages[callId] ?: return false
+        val code = msg.statusCode ?: 0
+        if (code == 100) return true          // provisional, keep waiting
+        if (code == 401 || code == 407) {
+            txn.challenge = SipAuth.parseChallenge(msg)
+        }
+        txn.status = code
+        txn.latch.countDown()
+        return true
+    }
+
     /** Re-send INVITE with authentication */
     fun resendInviteWithAuth(call: SipCall, authParams: SipAuth.AuthParams) {
         val toHeader = call.toHeader ?: return
@@ -596,6 +692,10 @@ class SipClient(
 
         /** Seconds to wait for a REGISTER response before calling it failed. */
         private const val REGISTER_TIMEOUT_SEC = 10L
+
+        /** How long to wait for a MESSAGE's final response before treating it
+         *  as unsent and leaving it queued for the next attempt. */
+        private const val MESSAGE_TIMEOUT_SEC = 10L
 
         /** Consecutive failures before asking GatewayService for a new socket. */
         private const val MAX_REGISTER_FAILURES = 3
