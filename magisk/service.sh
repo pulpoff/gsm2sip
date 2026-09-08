@@ -40,10 +40,30 @@ else
     log -t "$TAG" "Gateway app not installed — nothing to sync"
 fi
 
+# ── Wait for PackageManager ───────────────────────────
+# service.sh runs in late_start, which is still early enough that `pm` is not
+# answering yet: every grant below silently did nothing on a cold boot, which
+# is how RECEIVE_SMS came to be ungranted while the log claimed otherwise.
+# Backgrounded so the wait does not hold up Magisk's service stage.
+wait_for_pm() {
+    i=0
+    while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 150 ]; do
+        sleep 2
+        i=$((i + 1))
+    done
+    i=0
+    while ! pm path android >/dev/null 2>&1 && [ $i -lt 30 ]; do
+        sleep 2
+        i=$((i + 1))
+    done
+}
+
 # ── Grant runtime permissions automatically ───────────
 # These normally require user approval via UI prompts.
 # Granting them here avoids manual setup on a headless gateway.
 PKG="com.callagent.gateway"
+(
+wait_for_pm
 for PERM in \
     android.permission.RECORD_AUDIO \
     android.permission.READ_PHONE_STATE \
@@ -61,6 +81,31 @@ for PERM in \
         log -t "$TAG" "Granted: $PERM" || \
         log -t "$TAG" "Skip (already granted or N/A): $PERM"
 done
+
+# ── No outgoing SMS rate limit ────────────────────────
+# SmsUsageMonitor stops an app that is not the default SMS app after 30
+# messages in 30 minutes and asks the user to confirm — a dialog nobody is
+# there to answer on a gateway.  It reads these two globals before falling
+# back to the framework defaults, so setting them lifts the cap.
+settings put global sms_outgoing_check_interval_ms 1000 2>/dev/null && \
+    log -t "$TAG" "Outgoing SMS rate limit lifted" || \
+    log -t "$TAG" "Could not lift outgoing SMS rate limit"
+settings put global sms_outgoing_check_max_count 1000000 2>/dev/null
+
+# ── Keep SMS traffic silent ───────────────────────────
+# The gateway forwards messages; it does not need the device to announce them,
+# and nobody is looking at this screen.  Google Messages stays the default SMS
+# app - it stores the messages and its copy is a useful independent record -
+# but it is not allowed to notify.  Revoking POST_NOTIFICATIONS is what
+# actually silences it; the appop is set too, for anything that checks it.
+MSGS="com.google.android.apps.messaging"
+if pm path "$MSGS" >/dev/null 2>&1; then
+    pm revoke "$MSGS" android.permission.POST_NOTIFICATIONS 2>/dev/null && \
+        log -t "$TAG" "Silenced notifications: $MSGS" || \
+        log -t "$TAG" "Could not silence notifications: $MSGS"
+    appops set --uid "$MSGS" POST_NOTIFICATION ignore 2>/dev/null
+fi
+) &
 
 # ── PermissionController: hidden by Magisk overlay ────
 # The module's filesystem overlay hides PermissionController's APK

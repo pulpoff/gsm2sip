@@ -629,16 +629,36 @@ class GatewayService : Service() {
         checkSelfPermission(android.Manifest.permission.SEND_SMS) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
+    /** One dispatch pass at a time, with a re-run for anything that arrived
+     *  while it was running — a burst of requests otherwise starts a pass per
+     *  request, all walking the same queue. */
+    private val smsDispatching = AtomicBoolean(false)
+    @Volatile private var smsDispatchAgain = false
+
     /** Hand anything not yet given to the modem to the modem. */
     private fun dispatchOutbox() {
+        if (!smsDispatching.compareAndSet(false, true)) {
+            smsDispatchAgain = true
+            return
+        }
         thread(name = "sms-dispatch") {
-            for (sms in SmsOutbox.all(this)) {
-                if (sms.dispatched) continue
-                if (!SmsSender.dispatch(this, sms)) {
-                    // Nothing will call back; say so now rather than leaving
-                    // the server waiting for a report that cannot come.
-                    reportOutbox(sms.id)
-                }
+            try {
+                do {
+                    smsDispatchAgain = false
+                    for (sms in SmsOutbox.all(this)) {
+                        // The claim is what makes this safe, not the loop:
+                        // whoever wins it is the only one that sends.
+                        if (!SmsOutbox.claimForDispatch(this, sms.id)) continue
+                        if (!SmsSender.dispatch(this, sms)) {
+                            // Nothing will call back; say so now rather than
+                            // leaving the server waiting for a report that
+                            // cannot come.
+                            reportOutbox(sms.id)
+                        }
+                    }
+                } while (smsDispatchAgain)
+            } finally {
+                smsDispatching.set(false)
             }
         }
     }

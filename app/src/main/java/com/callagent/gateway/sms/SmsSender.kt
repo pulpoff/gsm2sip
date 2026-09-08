@@ -33,7 +33,7 @@ object SmsSender {
             val parts = manager.divideMessage(sms.text)
             val count = parts.size
 
-            SmsOutbox.update(context, sms.id) { it.copy(parts = count, dispatched = true) }
+            SmsOutbox.update(context, sms.id) { it.copy(parts = count) }
 
             val sentIntents = ArrayList<PendingIntent>(count)
             val deliveryIntents = ArrayList<PendingIntent>(count)
@@ -48,7 +48,7 @@ object SmsSender {
         } catch (e: Exception) {
             Log.e(TAG, "Dispatch of ${sms.id} failed: ${e.message}", e)
             SmsOutbox.update(context, sms.id) {
-                it.copy(dispatched = true, sentFailed = maxOf(it.parts, 1), lastError = describe(e))
+                it.copy(sentFailed = maxOf(it.parts, 1), lastError = describe(e))
             }
             false
         }

@@ -73,6 +73,24 @@ object SmsOutbox {
         return updated
     }
 
+    /**
+     * Take ownership of a message for dispatch, once.
+     *
+     * Returns false if someone already has it.  Read-then-write was not
+     * enough: every accepted request kicks a dispatch pass, and two passes
+     * scanning the same queue both saw dispatched=false and both handed the
+     * message to the modem — the recipient got it twice.
+     */
+    @Synchronized
+    fun claimForDispatch(context: Context, id: String): Boolean {
+        val all = read(context).toMutableList()
+        val i = all.indexOfFirst { it.id == id }
+        if (i < 0 || all[i].dispatched) return false
+        all[i] = all[i].copy(dispatched = true)
+        write(context, all)
+        return true
+    }
+
     @Synchronized
     fun remove(context: Context, id: String) {
         write(context, read(context).filterNot { it.id == id })
