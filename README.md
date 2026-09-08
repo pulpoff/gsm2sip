@@ -43,12 +43,25 @@ remote actually offered rather than failing a call over a preference.
 | Device | SoC | Agent → caller | Caller → agent | Status |
 |---|---|---|---|---|
 | Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **fully working** |
-| Samsung Galaxy S4 Mini | Qualcomm MSM8930, WCD9304 | digital, via `incall_music` | acoustic (mic hears the speaker) | partial |
+| Samsung Galaxy S4 Mini (`serranolte`) | Qualcomm MSM8960, WCD9304 | digital, via `incall_music` | digital, via `VOC_REC_*` | **fully working** |
 | Samsung Galaxy S10e | Exynos 9820, CS47L93 | no path | no path | not usable |
 
 **The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
 both directions, entirely through the modem, with the handset's own microphone
 and speaker muted for the whole call.
+
+**The Galaxy S4 Mini works fully too**, which is worth dwelling on because it
+is a 2013 handset on LineageOS 16 (Android 9) and armeabi-v7a — and because its
+own vendor configuration claims it cannot.  Its
+`audio_policy_configuration.xml` declares no `incall_music_uplink` mixPort and
+no Telephony Tx device, and `mixer_paths.xml` has no incall-music path at all,
+yet the kernel exposes `Incall_Music Audio Mixer MultiMedia1/2` and
+`MultiMedia1 Mixer VOC_REC_DL/UL` regardless.  Read the mixer, not the XML.
+
+It also needs none of the `vsid`/`call_state` announcement the Poco depends
+on: its HAL predates that interface entirely, and marks its own voice session
+active on `MODE_IN_CALL`, which is exactly what LineageOS fails to do on the
+newer HAL.  The older vendor image is an asset here, not a liability.
 
 ### Choosing a device
 
@@ -76,7 +89,7 @@ What has actually been checked so far:
 | Device | SoC | Vendor | Result |
 |---|---|---|---|
 | Poco X3 NFC | SM6150/SM7150 | Xiaomi (MIUI) | fully working, verified on live calls |
-| Galaxy S4 Mini | MSM8930 | — | `incall_music` present; digital capture untested |
+| Galaxy S4 Mini | MSM8960 | LineageOS 16 | fully working, verified on a live call |
 | Galaxy S10e | Exynos 9820 | — | no path in either direction |
 
 Everything the working profile depends on is generic Qualcomm audio, so other
@@ -127,6 +140,14 @@ chmod +x build.sh
 
 Outputs:
 - `gateway-magisk.zip` — Magisk module containing the APK, permissions, and audio tools (tinymix, tinycap). This is the only file you need to install.
+
+The APK itself is architecture-independent, but `tinymix` is not: the ALSA
+control ioctls encode the size of structs containing `long`, so an arm64 build
+and an armeabi-v7a build speak different ioctl ABIs and neither works on the
+other's kernel.  The module ships both and `install.sh` picks the matching one
+at flash time.  Getting this wrong fails quietly rather than loudly — the wrong
+binary is still marked executable, so it looks present while every mixer
+command dies with `not executable: 64-bit ELF file`.
 
 ## Device Setup
 
