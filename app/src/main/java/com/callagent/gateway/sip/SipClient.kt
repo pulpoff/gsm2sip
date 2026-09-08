@@ -183,7 +183,11 @@ class SipClient(
 
     private fun doSend(data: String, address: Pair<String, Int>) {
         try {
-            val bytes = data.toByteArray()
+            // Explicit, not the platform default.  It happens to be UTF-8 on
+            // Android, so this changes nothing today -- but SIP bodies carry
+            // the message text, and an implicit charset is the one thing that
+            // would silently turn every umlaut into mojibake.
+            val bytes = data.toByteArray(Charsets.UTF_8)
             // Use cached address for server to avoid DNS on main thread
             val addr = if (address.first == serverDomain) {
                 resolvedServerAddr ?: InetAddress.getByName(address.first)
@@ -208,7 +212,7 @@ class SipClient(
                 val s = socket ?: break
                 val packet = DatagramPacket(buf, buf.size)
                 s.receive(packet)
-                val data = String(packet.data, 0, packet.length)
+                val data = String(packet.data, 0, packet.length, Charsets.UTF_8)
                 val address = Pair(packet.address.hostAddress ?: "", packet.port)
                 handlePacket(data, address)
             } catch (_: SocketTimeoutException) {

@@ -851,10 +851,19 @@ class GatewayService : Service() {
             Log.i(TAG, "Marked $direct inbox message(s) read")
             return
         }
+        // Straight at the database, as root.  Going through the provider does
+        // not work and does not say so: it accepts writes only from the
+        // default SMS app and silently reports success to everyone else, so
+        // `content update` returns rc=0 and changes nothing.  The path moved
+        // to /data/user_de in the device-encrypted split, so try both.
         val out = RootShell.execForOutput(
-            "content update --uri content://sms/inbox " +
-                "--bind read:i:1 --bind seen:i:1 --where \"read=0 OR seen=0\" 2>&1",
-            timeoutMs = 5000
+            "for d in /data/user_de/0 /data/data; do " +
+                "db=\$d/com.android.providers.telephony/databases/mmssms.db; " +
+                "if [ -f \"\$db\" ]; then " +
+                "sqlite3 \"\$db\" " +
+                "\"UPDATE sms SET read=1, seen=1 WHERE read=0 OR seen=0;\"; " +
+                "break; fi; done 2>&1",
+            timeoutMs = 8000
         )
         if (out.isNotBlank()) Log.w(TAG, "markInboxRead: $out")
     }

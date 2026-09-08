@@ -140,16 +140,33 @@ settings put global sms_outgoing_check_max_count 1000000 2>/dev/null
 
 # ── Keep SMS traffic silent ───────────────────────────
 # The gateway forwards messages; it does not need the device to announce them,
-# and nobody is looking at this screen.  Google Messages stays the default SMS
-# app - it stores the messages and its copy is a useful independent record -
-# but it is not allowed to notify.  Revoking POST_NOTIFICATIONS is what
-# actually silences it; the appop is set too, for anything that checks it.
+# and nobody is looking at this screen.  The default SMS app stays what it is -
+# it stores the messages and its copy is a useful independent record - but it
+# is not allowed to notify.
+#
+# The package is asked for, not assumed.  This used to be hardcoded to Google
+# Messages, so on a LineageOS build - which ships the AOSP app,
+# com.android.messaging - `pm path` failed on the first line and the whole
+# function silently did nothing, while the log still said it had run.
+#
+# Both levers are pulled because which one works depends on the release:
+# POST_NOTIFICATIONS is the permission from Android 13 on, and the
+# POST_NOTIFICATION appop is what actually gates the shade before that.
 MSGS="com.google.android.apps.messaging"
 silence_messages() {
-    pm path "$MSGS" >/dev/null 2>&1 || return 1
-    pm revoke "$MSGS" android.permission.POST_NOTIFICATIONS 2>/dev/null
-    appops set --uid "$MSGS" POST_NOTIFICATION ignore 2>/dev/null
-    appops set "$MSGS" POST_NOTIFICATION ignore 2>/dev/null
+    _silenced=1
+    _default=$(settings get secure sms_default_application 2>/dev/null | tr -d '\r')
+    case "$_default" in null|'') _default="" ;; esac
+    for _pkg in $_default com.google.android.apps.messaging com.android.messaging; do
+        [ -n "$_pkg" ] || continue
+        pm path "$_pkg" >/dev/null 2>&1 || continue
+        pm revoke "$_pkg" android.permission.POST_NOTIFICATIONS 2>/dev/null
+        appops set --uid "$_pkg" POST_NOTIFICATION ignore 2>/dev/null
+        appops set "$_pkg" POST_NOTIFICATION ignore 2>/dev/null
+        MSGS="$_pkg"
+        _silenced=0
+    done
+    return $_silenced
 }
 
 silence_messages && log -t "$TAG" "Silenced notifications: $MSGS"
