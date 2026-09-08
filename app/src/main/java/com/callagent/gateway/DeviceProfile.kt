@@ -250,9 +250,15 @@ data class DeviceProfile(
                 "/system/xbin/tinymix",
             )
             try {
-                // Batch-check all paths in a single su call for speed
+                // Batch-check all paths in a single su call for speed.
+                // The executable bit alone is not enough: a Magisk overlay can
+                // put a binary of the wrong ABI on the path (an ARM64 tinymix
+                // over a 32-bit ROM's own), and the shell then refuses every
+                // invocation with "not executable: 64-bit ELF file" while the
+                // file still looks perfectly runnable.  Run it once and keep
+                // only a path that actually came back.
                 val checks = paths.joinToString("; ") { p ->
-                    "[ -x '$p' ] && echo 'FOUND:$p'"
+                    "[ -x '$p' ] && '$p' >/dev/null 2>&1 && echo 'FOUND:$p'"
                 }
                 val result = RootShell.execForOutput(
                     "$checks; which tinymix 2>/dev/null | head -1",
@@ -276,8 +282,9 @@ data class DeviceProfile(
                 Log.w(TAG, "tinymix discovery error: ${e.message}")
             }
 
-            Log.e(TAG, "tinymix NOT FOUND on device! ABOX/ALSA mixer controls will not work. " +
-                "Push a static arm64 tinymix binary to /data/local/tmp/tinymix (chmod 755)")
+            Log.e(TAG, "no runnable tinymix on device! ABOX/ALSA mixer controls will not work. " +
+                "Push a static tinymix for ${Build.SUPPORTED_ABIS.firstOrNull()} to " +
+                "/data/local/tmp/tinymix (chmod 755)")
             return ""
         }
 
