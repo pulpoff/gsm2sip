@@ -52,11 +52,22 @@ class SmsSendReceiver : BroadcastReceiver() {
             Log.w(TAG, "Cannot parse delivery report for $id: ${e.message}")
             null
         }
+        // A report with no readable PDU still means the SMSC sent one, which
+        // it only does for a message it has resolved — but it does not say
+        // which way.  Counted as delivered, and recorded as unconfirmed so the
+        // server can tell an inferred result from a stated one.
         val delivered = status == null || status < 32
         Log.i(TAG, "Delivery report for $id part $part: status=$status delivered=$delivered")
         SmsOutbox.update(context, id) {
-            if (delivered) it.copy(deliveredOk = it.deliveredOk + 1)
-            else it.copy(deliveredFailed = it.deliveredFailed + 1, lastError = "status_$status")
+            when {
+                status == null -> it.copy(deliveredOk = it.deliveredOk + 1, status = "unknown")
+                delivered -> it.copy(deliveredOk = it.deliveredOk + 1, status = status.toString())
+                else -> it.copy(
+                    deliveredFailed = it.deliveredFailed + 1,
+                    status = status.toString(),
+                    lastError = "status_$status"
+                )
+            }
         }
     }
 

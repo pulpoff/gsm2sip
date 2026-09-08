@@ -717,6 +717,7 @@ class GatewayService : Service() {
             put("sentFailed", sms.sentFailed)
             put("deliveredOk", sms.deliveredOk)
             put("deliveredFailed", sms.deliveredFailed)
+            if (sms.status.isNotEmpty()) put("status", sms.status)
             if (sms.lastError.isNotEmpty()) put("reason", sms.lastError)
             put("at", smsTimeFormat.format(java.util.Date()))
         }.toString()
@@ -728,6 +729,7 @@ class GatewayService : Service() {
             "X-SMS-Parts: ${maxOf(sms.parts, 1)}",
             "X-SMS-At: ${smsTimeFormat.format(java.util.Date())}"
         )
+        if (sms.status.isNotEmpty()) headers += "X-SMS-Status: ${sms.status}"
         if (sms.lastError.isNotEmpty()) headers += "X-SMS-Reason: ${sms.lastError}"
 
         // text/plain, not application/json: chan_sip refuses anything else on

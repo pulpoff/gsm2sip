@@ -24,6 +24,9 @@ data class OutboundSms(
     val lastError: String = "",
     val deliveredOk: Int = 0,
     val deliveredFailed: Int = 0,
+    /** The SMSC's status value, or "unknown" when the report carried no
+     *  readable PDU — an inferred result should not look like a stated one. */
+    val status: String = "",
     val submitReported: Boolean = false,
     val finalReported: Boolean = false
 )
@@ -102,6 +105,7 @@ object SmsOutbox {
         put("parts", s.parts); put("created", s.createdAt); put("dispatched", s.dispatched)
         put("sentOk", s.sentOk); put("sentFailed", s.sentFailed); put("err", s.lastError)
         put("delOk", s.deliveredOk); put("delFailed", s.deliveredFailed)
+        put("status", s.status)
         put("submitReported", s.submitReported); put("finalReported", s.finalReported)
     }
 
@@ -118,6 +122,7 @@ object SmsOutbox {
         lastError = o.optString("err"),
         deliveredOk = o.optInt("delOk"),
         deliveredFailed = o.optInt("delFailed"),
+        status = o.optString("status"),
         submitReported = o.optBoolean("submitReported"),
         finalReported = o.optBoolean("finalReported")
     )
