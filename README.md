@@ -5,7 +5,7 @@
 <h1 align="center">gsm2sip</h1>
 
 <p align="center">
-Bridges GSM calls on an Android phone's SIM to any SIP server.
+Bridges GSM calls on  Android phone to any SIP server.
 Server, port, credentials and codec are configured in the app.
 </p>
 
