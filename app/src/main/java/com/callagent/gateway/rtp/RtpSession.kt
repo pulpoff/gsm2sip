@@ -95,18 +95,20 @@ class RtpSession(
     // bridge that already has 100-200ms of inherent GSM latency.
     // Previous capacity=3 was too aggressive: any slight jitter caused
     // packet drops and choppy audio.
-    /** Jitter buffer depth, in 20ms frames.  This is the cap on how much
-     *  delay can accumulate between the network and the caller's ear — the
-     *  queue used to hold 8 and was drained down to 5, so 100ms was permanently
-     *  sitting in it on top of the audio buffers.
+    /** Jitter buffer, in 20ms frames.
      *
-     *  The capacity alone bounds the latency; there is deliberately no drain
-     *  loop.  Discarding frames merely because the queue is above some target
-     *  throws away audio the caller would otherwise have heard, and a burst
-     *  that would have been consumed a few milliseconds later gets destroyed
-     *  instead.  Frames are only dropped when the queue is genuinely full,
-     *  which is the point at which the consumer really cannot keep up. */
-    private val jitterBuffer = ArrayBlockingQueue<ByteArray>(4)
+     *  Four frames was too tight to be workable.  Measured over a 33s call it
+     *  sat at 3-4 — pinned at capacity — and logged 87 dropped frames *and* 90
+     *  underruns out of ~1650: about three audible glitches a second, because
+     *  at that depth every burst overflows and every gap empties it.  There is
+     *  no depth that both absorbs real network jitter and holds 80ms.
+     *
+     *  So: room to absorb a burst, and a high-water mark to shed the excess a
+     *  frame at a time so the burst does not park permanent latency in the
+     *  queue.  Shedding one frame occasionally is the same kind of loss as the
+     *  overflow drop, but it happens at a chosen depth instead of at the
+     *  ceiling, and it is two orders of magnitude rarer. */
+    private val jitterBuffer = ArrayBlockingQueue<ByteArray>(JITTER_CAPACITY)
 
     // RTP inactivity tracking
     @Volatile private var lastRtpReceivedTime = 0L
@@ -125,6 +127,9 @@ class RtpSession(
     /** Frames of silence written because the jitter buffer was empty — the
      *  audible gaps, i.e. late or lost packets from the far end. */
     @Volatile private var underruns = 0L
+    /** Frames shed at the high-water mark to keep the queue from parking
+     *  latency after a burst. */
+    @Volatile private var trimmedFrames = 0L
     @Volatile var audioSourceName = "none"; private set
     @Volatile private var playbackUsageName = "MEDIA"
 
@@ -1053,7 +1058,7 @@ class RtpSession(
                 val stats = "tx=$txPacketCount rx=$rxPacketCount play=$playbackFrames " +
                         "capRMS=$captureRms rawCapRMS=$rawCaptureRms playRMS=$playbackRms src=$audioSourceName " +
                         "rate=${captureRate}/${playbackRate} jbuf=${jitterBuffer.size} " +
-                        "drop=$rxDropped under=$underruns " +
+                        "drop=$rxDropped under=$underruns trim=$trimmedFrames " +
                         "gates:echo=$echoGatedFrames noise=$noiseGatedFrames fwd=$forwardedFrames dt=$doubleTalkFrames" +
                         getCpuStats()
                 Log.i(TAG, "RTP: $stats")
@@ -1317,7 +1322,10 @@ class RtpSession(
                 // jitter without audible gaps.  100ms is still well within
                 // the GSM bridge's inherent latency budget.
 
-                val encoded = jitterBuffer.poll(18, TimeUnit.MILLISECONDS)
+                // Longer than the 20ms frame period, deliberately: at 18ms a
+                // packet that was merely a little late was treated as missing
+                // and a silence frame went to the caller instead.
+                val encoded = jitterBuffer.poll(JITTER_POLL_MS, TimeUnit.MILLISECONDS)
                 if (encoded == null) {
                     // Write silence to keep AudioTrack fed and prevent underruns.
                     track.write(silenceFrame, 0, silenceFrame.size)
@@ -1326,6 +1334,14 @@ class RtpSession(
                     currentPlaybackActive = false
                     wasPlayingSilence = true
                     continue
+                }
+
+                // Shed one frame if a burst has left the queue deep.  Without
+                // this the depth reached after a burst is simply kept, and the
+                // caller hears every later word that much later.
+                if (jitterBuffer.size > JITTER_HIGH_WATER) {
+                    jitterBuffer.poll()
+                    trimmedFrames++
                 }
 
                 // Decode based on codec.  G.722 outputs 16 kHz natively;
@@ -1905,6 +1921,13 @@ class RtpSession(
          *  anyway.  A capture read is one 20ms frame and the playback poll is
          *  18ms, so a healthy loop is gone well inside this. */
         private const val JOIN_TIMEOUT_MS = 400L
+
+        /** Jitter buffer ceiling, in 20ms frames (240ms). */
+        private const val JITTER_CAPACITY = 12
+        /** Depth above which one frame per cycle is shed (140ms). */
+        private const val JITTER_HIGH_WATER = 7
+        /** How long playback waits for a late frame before writing silence. */
+        private const val JITTER_POLL_MS = 30L
     }
 }
 
