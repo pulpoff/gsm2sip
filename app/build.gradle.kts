@@ -11,14 +11,31 @@ android {
         applicationId = "com.callagent.gateway"
         minSdk = 26
         targetSdk = 34
-        versionCode = 362
-        versionName = "1.0.1"
+        versionCode = 365
+        versionName = "1.0.2"
+    }
+
+    // A release build is signed with the same debug key the debug build uses.
+    // That is deliberate: it keeps the signature identical, so a release APK can
+    // replace a debug one inside the Magisk module without PackageManager
+    // rejecting it for a signature mismatch.  The point of building release here
+    // is not secrecy, it is `debuggable=false` — ART compiles a debuggable app in
+    // a deoptimizable mode with much weaker inlining, which costs real CPU in the
+    // per-frame audio loops.
+    signingConfigs {
+        create("shared") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
 

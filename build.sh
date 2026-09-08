@@ -109,7 +109,12 @@ build_apk() {
 
     if [ "$BUILD_TYPE" = "release" ]; then
         ./gradlew assembleRelease --no-daemon
-        APK_PATH="app/build/outputs/apk/release/app-release-unsigned.apk"
+        # Signed via the "shared" signingConfig, so the output is app-release.apk
+        # rather than app-release-unsigned.apk.  An unsigned APK is rejected by
+        # PackageManager with INSTALL_PARSE_FAILED_NO_CERTIFICATES and is
+        # useless in the priv-app module, which is what the old path produced.
+        APK_PATH="app/build/outputs/apk/release/app-release.apk"
+        [ -f "$APK_PATH" ] || APK_PATH="app/build/outputs/apk/release/app-release-unsigned.apk"
     else
         ./gradlew assembleDebug --no-daemon
         APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
