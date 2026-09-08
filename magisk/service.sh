@@ -58,12 +58,58 @@ wait_for_pm() {
     done
 }
 
+# ── Keep the app's Magisk su policy on "allow" ────────
+# The gateway is useless without root: it drives the ALSA mixer through
+# tinymix to route agent audio into the GSM uplink, and grants itself
+# RECORD_AUDIO via appops.  Denied, it still answers calls and bridges them
+# with no audio in either direction, which is a much worse failure than not
+# answering at all.
+#
+# A superuser prompt that nobody is there to answer — this is a headless
+# gateway — writes policy=1 (deny) permanently, and that is exactly how a
+# working device went silent on 2026-09-09.  Seed policy=2 (allow) on every
+# boot so a stray prompt or a reinstall cannot leave it denied.
+#
+# Note this deliberately overrides a manual deny: on a dedicated gateway that
+# is the intent.  Remove this module to take the grant away.
+seed_su_policy() {
+    # The uid is assigned when the app is installed, so it cannot be baked in
+    # at flash time and can change across a reinstall.  Read it back instead.
+    SU_UID=$(stat -c %u "/data/user/0/$PKG" 2>/dev/null)
+    case "$SU_UID" in
+        ''|*[!0-9]*)
+            SU_UID=$(dumpsys package "$PKG" 2>/dev/null | grep -m1 -oE 'userId=[0-9]+' | cut -d= -f2)
+            ;;
+    esac
+    case "$SU_UID" in
+        ''|*[!0-9]*)
+            log -t "$TAG" "su policy: could not resolve uid for $PKG — not seeded"
+            return
+            ;;
+    esac
+
+    # REPLACE/upsert syntax varies with the schema Magisk ships, so branch on
+    # whether the row exists rather than relying on a constraint being there.
+    if magisk --sqlite "SELECT policy FROM policies WHERE uid=$SU_UID" 2>/dev/null | grep -q policy; then
+        magisk --sqlite "UPDATE policies SET policy=2, until=0 WHERE uid=$SU_UID" >/dev/null 2>&1
+    else
+        magisk --sqlite "INSERT INTO policies (uid,policy,until,logging,notification) VALUES ($SU_UID,2,0,1,1)" >/dev/null 2>&1
+    fi
+
+    if magisk --sqlite "SELECT policy FROM policies WHERE uid=$SU_UID" 2>/dev/null | grep -q "policy=2"; then
+        log -t "$TAG" "su policy: uid $SU_UID allowed"
+    else
+        log -t "$TAG" "su policy: FAILED to allow uid $SU_UID — gateway will bridge calls with no audio"
+    fi
+}
+
 # ── Grant runtime permissions automatically ───────────
 # These normally require user approval via UI prompts.
 # Granting them here avoids manual setup on a headless gateway.
 PKG="com.callagent.gateway"
 (
 wait_for_pm
+seed_su_policy
 for PERM in \
     android.permission.RECORD_AUDIO \
     android.permission.READ_PHONE_STATE \
