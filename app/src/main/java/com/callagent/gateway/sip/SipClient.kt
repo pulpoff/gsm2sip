@@ -1,5 +1,6 @@
 package com.callagent.gateway.sip
 
+import android.os.Build
 import android.util.Log
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -87,8 +88,17 @@ class SipClient(
     fun start() {
         if (running.get()) return
         running.set(true)
+        // Identify the handset, not the server: with several gateways
+        // registered to the same PBX the server domain is the one thing every
+        // one of them has in common, so it told the CDRs nothing.  Build.DEVICE
+        // is the short codename — "serranolte", "surya" — which is what
+        // distinguishes them.  Whitespace is stripped because a User-Agent
+        // value has to stay a single header token.
+        val handset = (Build.DEVICE?.takeIf { it.isNotBlank() }
+            ?: Build.MODEL?.takeIf { it.isNotBlank() }
+            ?: "unknown").trim().replace(Regex("\\s+"), "-")
         SipBuilder.userAgent =
-            "gsm2sip v${com.callagent.gateway.BuildConfig.VERSION_NAME} $serverDomain"
+            "gsm2sip v${com.callagent.gateway.BuildConfig.VERSION_NAME} $handset"
         callIdBase = "${System.currentTimeMillis() / 1000}@$publicIp"
         createSocket()
 
