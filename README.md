@@ -6,7 +6,6 @@
 
 <p align="center">
 Bridges GSM calls on  Android phone to any SIP server.
-Server, port, credentials and codec are configured in the app.
 </p>
 
 | Calls and messages | Link detail |
