@@ -299,6 +299,7 @@ class GatewayService : Service() {
                     reconnect()
                 }
             }
+            ACTION_APPLY_CONFIG -> applyConfigChange()
             ACTION_DIAL -> dialFromDialler(intent)
             ACTION_MUTE_AGENT -> {
                 agentMuted = if (intent.hasExtra(EXTRA_MUTE_ON)) {
@@ -326,6 +327,35 @@ class GatewayService : Service() {
             else -> startGateway(intent)
         }
         return START_STICKY
+    }
+
+    /**
+     * Re-read the saved configuration and rebuild the SIP client with it.
+     *
+     * ACTION_RECONNECT deliberately only asks the *existing* client to
+     * register again, which is right for the status pill but wrong for a
+     * settings save: server, port, credentials and the STUN choice are all
+     * read once at bring-up, so editing them and pressing SAVE changed
+     * nothing until the next restart.
+     */
+    private fun applyConfigChange() {
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        cfgServer = prefs.getString("server", "") ?: ""
+        cfgPort = prefs.getInt("port", 5060)
+        cfgUser = prefs.getString("user", "") ?: ""
+        cfgPass = prefs.getString("pass", "") ?: ""
+        if (cfgServer.isEmpty() || cfgUser.isEmpty()) {
+            broadcastLog("ERROR: Missing server or username")
+            broadcastStatus("ERROR", "Missing SIP configuration")
+            return
+        }
+        broadcastLog("Config changed — rebuilding SIP client")
+        // A save is an explicit instruction, so it outranks a bring-up that
+        // is already in flight; the generation counter makes discarding that
+        // one safe.
+        stopped = false
+        initializing.set(false)
+        reconnect()
     }
 
     private fun dialFromDialler(intent: Intent?) {
@@ -497,16 +527,26 @@ class GatewayService : Service() {
         currentLocalIp = localIp
         broadcastLog("Local IP: $localIp")
 
-        // STUN: discover public IP for NAT traversal
-        val stunResult = try { StunClient.discover() } catch (e: Exception) {
+        // STUN: discover public IP for NAT traversal.  Optional, because a
+        // SIP server on the same network needs no public address at all —
+        // advertising one there would point the server at the far side of a
+        // NAT it never has to cross.
+        val useStun = getSharedPreferences("gateway", MODE_PRIVATE)
+            .getBoolean("use_stun", true)
+        val stunResult = if (!useStun) null else try {
+            StunClient.discover()
+        } catch (e: Exception) {
             Log.e(TAG, "STUN exception: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
         val publicIp = stunResult?.publicIp ?: localIp
-        if (stunResult != null) {
-            broadcastLog("STUN public IP: ${stunResult.publicIp}:${stunResult.publicPort}")
-        } else {
-            broadcastLog("STUN failed, using local IP for SDP")
+        when {
+            !useStun ->
+                broadcastLog("STUN off — direct SIP, advertising $localIp")
+            stunResult != null ->
+                broadcastLog("STUN public IP: ${stunResult.publicIp}:${stunResult.publicPort}")
+            else ->
+                broadcastLog("STUN failed, using local IP for SDP")
         }
 
         if (stopped) return
@@ -947,6 +987,7 @@ class GatewayService : Service() {
         const val EXTRA_NUMBER = "number"
         const val STATUS_ACTION = "com.callagent.gateway.STATUS"
         const val LOG_ACTION = "com.callagent.gateway.LOG"
+        const val ACTION_APPLY_CONFIG = "com.callagent.gateway.APPLY_CONFIG"
 
         fun start(context: Context, server: String, port: Int, user: String, pass: String) {
             val intent = Intent(context, GatewayService::class.java).apply {

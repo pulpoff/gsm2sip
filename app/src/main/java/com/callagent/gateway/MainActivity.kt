@@ -487,6 +487,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<EditText>(R.id.etCfgOwnNumber).setText(prefs.getString("own_number", ""))
         findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked =
             prefs.getBoolean("autoconnect", true)
+        findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked =
+            prefs.getBoolean("use_stun", true)
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711
@@ -504,6 +506,7 @@ class MainActivity : AppCompatActivity() {
         val pass = findViewById<EditText>(R.id.etCfgPass).text.toString().trim()
         val own = findViewById<EditText>(R.id.etCfgOwnNumber).text.toString().trim()
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
+        val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
             R.id.rbCodecBoth -> "both"
@@ -521,13 +524,19 @@ class MainActivity : AppCompatActivity() {
             .putString("pass", pass)
             .putString("own_number", own)
             .putBoolean("autoconnect", auto)
+            .putBoolean("use_stun", useStun)
             .putString("codec", codec)
             .apply()
-        appendLog("Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, codec=$codec)")
+        appendLog(
+            "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
+                "codec=$codec, stun=${if (useStun) "on" else "off"})"
+        )
         Toast.makeText(this, "Saved — reconnecting", Toast.LENGTH_SHORT).show()
-        // Apply immediately rather than waiting for the next restart.
+        // Apply immediately rather than waiting for the next restart.  This
+        // has to rebuild the client, not just re-register: the server, port,
+        // credentials and STUN choice are all read at bring-up.
         startService(Intent(this, GatewayService::class.java).apply {
-            action = GatewayService.ACTION_RECONNECT
+            action = GatewayService.ACTION_APPLY_CONFIG
         })
         switchTab("home")
     }

@@ -478,6 +478,23 @@
                             android:textColor="@color/text_label"
                             android:layout_marginTop="16dp" />
 
+                        <CheckBox
+                            android:id="@+id/cbCfgUseStun"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Use STUN"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Discovers the public IP so SIP and RTP survive NAT. Turn it off for a SIP server on the local network: the gateway then advertises its own address and talks to the server directly."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
                         <Button
                             android:id="@+id/btnCfgSave"
                             android:layout_width="match_parent"
