@@ -9,9 +9,9 @@ Bridges GSM calls on an Android phone's SIM to any SIP server.
 Server, port, credentials and codec are configured in the app.
 </p>
 
-| Dialer | SIP Registration |
+| Calls and messages | Link detail |
 |--------|-----------------|
-| <img src="gsm2sip1.jpg" width="300"> | <img src="gsm2sip2.jpg" width="300"> |
+| <img src="screen1.png" width="300"> | <img src="screen2.png" width="300"> |
 
 ## How It Works
 
@@ -19,6 +19,7 @@ A dedicated rooted Android phone with a local SIM card acts as a SIP-to-GSM gate
 
 - **Inbound**: Someone calls the SIM's number → the phone answers → the call is bridged to the SIP server, which routes it wherever the dialplan says (an AI agent, a queue, an extension)
 - **Outbound**: the SIP server sends an INVITE with an `X-GSM-Forward: +<number>` header → the phone dials that number over GSM → audio is bridged back to SIP
+- **SMS**: messages arriving on any SIM are forwarded to the server as SIP MESSAGE, and the server can ask the gateway to send one and be told what became of it — see [SMS over SIP](#sms-over-sip)
 
 Audio flows through shared speaker/mic — both GSM and SIP audio run concurrently on the same hardware, enabled by a Magisk module that disables Android's audio concurrency restrictions.
 
@@ -208,6 +209,148 @@ same => n,SIPAddHeader(X-GSM-Forward: +${EXTEN})
 same => n,Dial(SIP/gateway-gw1,60)
 same => n,Hangup()
 ```
+
+## SMS over SIP
+
+Messages travel as page-mode SIP MESSAGE (RFC 3428) over the registration that
+is already up for calls — no second connection, no extra port, nothing for the
+server to reach through the NAT.
+
+The gateway does **not** take the default-SMS-app role. Receiving works through
+`SMS_RECEIVED`, which reaches any app holding `RECEIVE_SMS`, and sending needs
+only `SEND_SMS`; the role exists to *store* messages, which a gateway has no
+reason to do. Both permissions are granted by the Magisk module, and the app
+re-grants them over root at bring-up if they are missing.
+
+### Received SMS → server
+
+One MESSAGE per message, already reassembled from its parts:
+
+```
+MESSAGE sip:+4915215320372@example.com SIP/2.0
+From: <sip:+4917098765432@example.com>;tag=gw123456789
+To: <sip:+4915215320372@example.com>
+X-SMS-Id: 550e8400-e29b-41d4-a716-446655440000
+X-SMS-From: +4917098765432
+X-SMS-To: +4915215320372
+X-SMS-Received: 2026-09-08T16:20:31Z
+X-SMS-Parts: 1
+X-SMS-Sim-Sub: 1
+X-SMS-Sim-Slot: 1
+X-SMS-Sim-Carrier: ExampleMobile
+Content-Type: text/plain;charset=UTF-8
+
+Hello from a mobile
+```
+
+The Request-URI is the receiving SIM's own number, so an SMS presents the same
+routing key an inbound call does. `X-SMS-Id` is the idempotency key: answer
+`200` or `202` and the message is done, answer anything else — or nothing — and
+the same id is retried every 30s until it lands. A message that arrives while
+SIP is down is written to disk and sent when registration returns.
+
+### Server → SMS
+
+```
+MESSAGE sip:+4917098765432@example.com SIP/2.0
+X-SMS-Id: 0ca1c8ad-27e1-4c9e-b6b4-41abca9805d3
+X-SMS-Sim-Slot: 1
+Content-Type: text/plain;charset=UTF-8
+
+Reply from the agent
+```
+
+The recipient is the Request-URI user, or `X-SMS-To` if you would rather keep
+the URI generic. `X-SMS-Sim-Slot` (or `X-SMS-Sim-Sub`) picks the SIM — a
+dual-SIM gateway has no meaningful default, since a reply has to leave by the
+SIM the conversation is on.
+
+The response says what the message will cost before you commit to the text:
+
+```
+SIP/2.0 202 Accepted
+X-SMS-Parts: 1
+X-SMS-Encoding: GSM7
+```
+
+**Only `202` is a promise.** `400` missing recipient or body, `415` body is not
+`text/plain`, `503` `SEND_SMS` not granted (retry later), `405` SMS handling
+unavailable — none of those queued anything. A repeat carrying an id already
+held is answered `202` and not sent again.
+
+One character outside GSM-7 forces the whole message to UCS-2, which cuts a
+part from 160 characters to 70: an 88-character reply is one part in plain
+ASCII and two with a single em dash in it. `X-SMS-Encoding` is how a sender
+finds that out in time to do something about it.
+
+### Delivery reports
+
+Two reports come back, each a MESSAGE addressed to the SIM's own number — so
+they arrive in the same context as an inbound SMS, and `X-SMS-Event` is what
+tells them apart.
+
+```
+X-SMS-Id: 0ca1c8ad-27e1-4c9e-b6b4-41abca9805d3
+X-SMS-Event: submitted
+X-SMS-To: +4917098765432
+X-SMS-Parts: 1
+X-SMS-At: 2026-09-08T16:56:09Z
+Content-Type: text/plain;charset=UTF-8
+
+{"id":"0ca1c8ad-…","event":"submitted","to":"+4917098765432","parts":1,
+ "sentOk":1,"sentFailed":0,"deliveredOk":0,"deliveredFailed":0,
+ "at":"2026-09-08T16:56:09Z"}
+```
+
+| `X-SMS-Event` | meaning | more follows? |
+|---|---|---|
+| `submitted` | the network accepted it | yes — a delivery result |
+| `failed` | the network refused it; see `X-SMS-Reason` | no, terminal |
+| `delivered` | the SMSC confirmed it reached the handset | no, terminal |
+| `undelivered` | the SMSC reported permanent failure | no, terminal |
+
+`X-SMS-Reason` names the failure rather than numbering it — `no_service`,
+`radio_off`, `limit_exceeded`, or the RIL code paired with the network's own
+cause, e.g. `modem_err/facility_rejected` when the carrier refuses the
+submission. `X-SMS-Status` carries the SMSC's status value, or `unknown` when
+the report arrived without a readable PDU, so an inferred result never looks
+like a stated one.
+
+Reports are retried like anything else: answer `200`/`202`, or the gateway
+sends them again, including after the next registration.
+
+### Asterisk (chan_sip)
+
+```ini
+; sip.conf
+[general]
+accept_outofcall_message=yes
+outofcall_message_context=messages
+auth_message_requests=yes
+```
+
+```ini
+; extensions.conf — exten is the Request-URI user, i.e. the SIM's number
+[messages]
+exten => _+X.,1,NoOp(${MESSAGE(from)} -> ${MESSAGE(to)})
+ same => n,Set(ID=${SIP_HEADER(X-SMS-Id)})
+ same => n,Set(EVENT=${SIP_HEADER(X-SMS-Event)})
+ same => n,GotoIf($["${EVENT}" != ""]?report)
+ same => n,AGI(sms_in.agi,${ID},${CALLERID(num)},${MESSAGE(body)})
+ same => n,Hangup()
+ same => n(report),AGI(sms_status.agi,${ID},${EVENT},${SIP_HEADER(X-SMS-Status)},${SIP_HEADER(X-SMS-Reason)})
+ same => n,Hangup()
+```
+
+Two chan_sip specifics worth knowing. It emits the `202` itself, before the
+dialplan runs, so a dialplan failure will not make the gateway retry — write
+durably early and dedupe on `X-SMS-Id`. And an unmatched extension returns
+`404`, which the gateway reads as not-accepted and retries, so make sure the
+pattern covers the SIM's number format.
+
+Carriers also rate-limit SMS independently of anything here: a run of sends can
+end in `modem_err/facility_rejected` for every destination, including the SIM's
+own number, until the allowance resets.
 
 ## Architecture
 

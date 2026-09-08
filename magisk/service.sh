@@ -99,12 +99,23 @@ settings put global sms_outgoing_check_max_count 1000000 2>/dev/null
 # but it is not allowed to notify.  Revoking POST_NOTIFICATIONS is what
 # actually silences it; the appop is set too, for anything that checks it.
 MSGS="com.google.android.apps.messaging"
-if pm path "$MSGS" >/dev/null 2>&1; then
-    pm revoke "$MSGS" android.permission.POST_NOTIFICATIONS 2>/dev/null && \
-        log -t "$TAG" "Silenced notifications: $MSGS" || \
-        log -t "$TAG" "Could not silence notifications: $MSGS"
+silence_messages() {
+    pm path "$MSGS" >/dev/null 2>&1 || return 1
+    pm revoke "$MSGS" android.permission.POST_NOTIFICATIONS 2>/dev/null
     appops set --uid "$MSGS" POST_NOTIFICATION ignore 2>/dev/null
-fi
+    appops set "$MSGS" POST_NOTIFICATION ignore 2>/dev/null
+}
+
+silence_messages && log -t "$TAG" "Silenced notifications: $MSGS"
+
+# Again once the SMS role has settled.  POST_NOTIFICATIONS is granted to the
+# default SMS app *by the role*, and the role is re-evaluated during a package
+# scan — a fresh module install, for one — which put the permission straight
+# back after the first pass revoked it.
+(
+    sleep 45
+    silence_messages && log -t "$TAG" "Silenced notifications (second pass): $MSGS"
+) &
 ) &
 
 # ── PermissionController: hidden by Magisk overlay ────
