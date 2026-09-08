@@ -4,6 +4,8 @@
     <string name="activity_title">gsm2sip</string>
     <string name="channel_name">gsm2sip Service</string>
     <string name="channel_description">Keeps SIP registration active</string>
+    <string name="channel_name_quiet">gsm2sip Service (silent)</string>
+    <string name="channel_description_quiet">Keeps SIP registration active, without a status bar icon</string>
     <string name="notification_title">gsm2sip</string>
     <string name="notification_text_registered">Registered — Ready</string>
     <string name="notification_text_unregistered">Connecting…</string>

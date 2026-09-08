@@ -71,7 +71,9 @@ class SmsReceiver : BroadcastReceiver() {
                 timestamp = sms.receivedAt,
                 durationSec = 0,
                 type = CallLogStore.TYPE_SMS,
-                text = text
+                text = text,
+                smsId = sms.id,
+                parts = parts.size
             )
         )
         Log.i(TAG, "SMS from $sender (${parts.size} part(s), sub=$subId slot=$slot) queued as ${sms.id}")

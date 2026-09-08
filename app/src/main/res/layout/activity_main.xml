@@ -458,9 +458,14 @@
                             android:hint="password" android:inputType="textPassword" />
 
                         <TextView style="@style/CfgLabel" android:text="Own Number (SIM)" />
-                        <EditText android:id="@+id/etCfgOwnNumber" style="@style/CfgField"
-                            android:hint="international, e.g. +4915112345678"
-                            android:inputType="phone" />
+                        <!-- One field per active SIM, built at runtime: the
+                             slots a device has, and which of them hold a live
+                             SIM, are only knowable on the device. -->
+                        <LinearLayout
+                            android:id="@+id/llCfgOwnNumbers"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
 
                         <TextView
                             android:layout_width="match_parent"
@@ -572,6 +577,24 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="Discovers the public IP so SIP and RTP survive NAT. Turn it off for a SIP server on the local network: the gateway then advertises its own address and talks to the server directly."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgNotification"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Status bar notification"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:checked="true"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Shows the gateway icon and status in the status bar. Turned off, it drops to the bottom of the notification shade and off the status bar — verified on Android 16; Android 9 keeps foreground-service icons visible whatever the setting. Android requires a background service to hold one notification, so it can never be removed entirely."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="6dp" />

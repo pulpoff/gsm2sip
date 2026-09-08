@@ -27,6 +27,11 @@ data class OutboundSms(
     /** The SMSC's status value, or "unknown" when the report carried no
      *  readable PDU — an inferred result should not look like a stated one. */
     val status: String = "",
+    /** Service centre that handled the message, read back from the delivery
+     *  report PDU.  Empty until one arrives. */
+    val smsc: String = "",
+    /** "GSM7", "UCS2", "8BIT" — how the text went out on the air. */
+    val encoding: String = "",
     val submitReported: Boolean = false,
     val finalReported: Boolean = false
 )
@@ -123,7 +128,7 @@ object SmsOutbox {
         put("parts", s.parts); put("created", s.createdAt); put("dispatched", s.dispatched)
         put("sentOk", s.sentOk); put("sentFailed", s.sentFailed); put("err", s.lastError)
         put("delOk", s.deliveredOk); put("delFailed", s.deliveredFailed)
-        put("status", s.status)
+        put("status", s.status); put("smsc", s.smsc); put("encoding", s.encoding)
         put("submitReported", s.submitReported); put("finalReported", s.finalReported)
     }
 
@@ -141,6 +146,8 @@ object SmsOutbox {
         deliveredOk = o.optInt("delOk"),
         deliveredFailed = o.optInt("delFailed"),
         status = o.optString("status"),
+        smsc = o.optString("smsc"),
+        encoding = o.optString("encoding"),
         submitReported = o.optBoolean("submitReported"),
         finalReported = o.optBoolean("finalReported")
     )

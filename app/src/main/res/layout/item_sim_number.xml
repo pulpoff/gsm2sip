@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One SIM's own-number field in Settings, plus the caption that says which
+     SIM it is.  A gateway with more than one active SIM needs a number per
+     SIM, and the numbers are indistinguishable without the caption. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <EditText
+        android:id="@+id/etSimNumber"
+        style="@style/CfgField"
+        android:hint="international, e.g. +4915112345678"
+        android:inputType="phone" />
+
+    <TextView
+        android:id="@+id/tvSimCaption"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="@color/text_hint"
+        android:paddingTop="2dp"
+        android:paddingBottom="4dp" />
+
+</LinearLayout>

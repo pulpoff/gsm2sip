@@ -439,6 +439,12 @@ class GatewayService : Service() {
      */
     private fun applyConfigChange() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        // Re-post first, so toggling the status bar setting takes effect now
+        // rather than at the next restart -- the channel is chosen when the
+        // notification is built.  Done before the validity check below, since
+        // the setting is independent of whether SIP is configured.
+        runCatching { startForeground(NOTIFICATION_ID, buildNotification(notifState)) }
+            .onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
         cfgServer = prefs.getString("server", "") ?: ""
         cfgPort = prefs.getInt("port", 5060)
         cfgUser = prefs.getString("user", "") ?: ""
@@ -485,6 +491,12 @@ class GatewayService : Service() {
                     return@thread
                 }
                 broadcastLog("SMS: forwarding ${queue.size} message(s) [$reason]")
+                // The default SMS app keeps its own copy and shows it unread.
+                // Nobody reads this screen, so an unread badge just
+                // accumulates for ever.  Done here rather than in the
+                // receiver: the default app writes its row when it handles
+                // SMS_DELIVER, which may not have happened yet at that point.
+                markInboxRead()
                 var failed = false
                 for (sms in queue) {
                     val code = sendSmsOverSip(sip, sms)
@@ -537,7 +549,7 @@ class GatewayService : Service() {
      */
     private fun sendSmsOverSip(sip: SipClient, sms: PendingSms): Int {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val configuredOwn = prefs.getString("own_number", "")?.trim().orEmpty()
+        val configuredOwn = ownNumberForSub(sms.subId)
         val target = sms.to.ifEmpty { configuredOwn }.ifEmpty { cfgUser }
         val targetUri = "sip:$target@$cfgServer"
         val headers = mutableListOf(
@@ -611,7 +623,15 @@ class GatewayService : Service() {
             msg.header("x-sms-sim-sub")?.trim()?.toIntOrNull(),
             msg.header("x-sms-sim-slot")?.trim()?.toIntOrNull()
         )
-        SmsOutbox.add(this, OutboundSms(id = id, to = target, text = text, subId = subId))
+        val measured = measureSms(text)
+        SmsOutbox.add(
+            this,
+            OutboundSms(
+                id = id, to = target, text = text, subId = subId,
+                parts = measured?.parts ?: 0,
+                encoding = measured?.encoding ?: ""
+            )
+        )
         CallLogStore.addEntry(
             this,
             CallLogEntry(
@@ -620,7 +640,11 @@ class GatewayService : Service() {
                 timestamp = System.currentTimeMillis(),
                 durationSec = 0,
                 type = CallLogStore.TYPE_SMS,
-                text = text
+                text = text,
+                smsId = id,
+                encoding = measured?.encoding ?: "",
+                parts = measured?.parts ?: 0,
+                status = "pending"
             )
         )
         broadcastLog("SMS send: $id to $target accepted (${text.length} chars, sub=$subId)")
@@ -634,21 +658,37 @@ class GatewayService : Service() {
         return 202 to cost
     }
 
-    /** Parts and encoding, as headers for the 202. */
-    private fun measure(text: String): List<String> = try {
+    /** How the message will go out: parts it splits into, and its encoding. */
+    data class SmsMeasure(val parts: Int, val encoding: String)
+
+    /**
+     * Measure once and use it twice — the 202 headers tell the server, and
+     * the call-log entry keeps it for the detail view.  Recomputing at
+     * display time would be measuring a different thing: what the text would
+     * encode as now, not what was actually sent.
+     */
+    private fun measureSms(text: String): SmsMeasure? = try {
         // [0] parts, [1] code units used, [2] remaining, [3] encoding
         val m = android.telephony.SmsMessage.calculateLength(text, false)
         // SmsMessage.ENCODING_7BIT = 1, ENCODING_8BIT = 2, ENCODING_16BIT = 3
-        val encoding = when (m[3]) {
-            1 -> "GSM7"
-            2 -> "8BIT"
-            3 -> "UCS2"
-            else -> "UNKNOWN"
-        }
-        listOf("X-SMS-Parts: ${m[0]}", "X-SMS-Encoding: $encoding")
+        SmsMeasure(
+            parts = m[0],
+            encoding = when (m[3]) {
+                1 -> "GSM7"
+                2 -> "8BIT"
+                3 -> "UCS2"
+                else -> "UNKNOWN"
+            }
+        )
     } catch (e: Exception) {
         Log.w(TAG, "Could not measure message: ${e.message}")
-        emptyList()
+        null
+    }
+
+    /** Parts and encoding, as headers for the 202. */
+    private fun measure(text: String): List<String> {
+        val m = measureSms(text) ?: return emptyList()
+        return listOf("X-SMS-Parts: ${m.parts}", "X-SMS-Encoding: ${m.encoding}")
     }
 
     /** Which SIM to send from: an explicit subscription wins, then a slot, then
@@ -763,6 +803,62 @@ class GatewayService : Service() {
         }
     }
 
+    /**
+     * The gateway's own number for the SIM that carried this message.
+     *
+     * With one SIM this is just own_number.  With more than one it has to be
+     * the number of the SIM the message actually arrived on or left by, or
+     * the server maps it to the wrong assistant -- both SIMs reach the same
+     * gateway, and only the number distinguishes them.  Falls back to the
+     * single legacy value whenever the SIM cannot be resolved.
+     */
+    private fun ownNumberForSub(subId: Int): String {
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val fallback = prefs.getString("own_number", "")?.trim().orEmpty()
+        if (subId < 0) return fallback
+        val slot = runCatching {
+            getSystemService(android.telephony.SubscriptionManager::class.java)
+                ?.getActiveSubscriptionInfo(subId)?.simSlotIndex
+        }.getOrNull() ?: return fallback
+        return prefs.getString("own_number_slot_$slot", "")?.trim()
+            ?.ifEmpty { null } ?: fallback
+    }
+
+    /**
+     * Clear the unread state on the default SMS app's copy of inbound
+     * messages.
+     *
+     * The gateway is not the default SMS app -- Google Messages stays that,
+     * because its copy is a useful independent record -- and the SMS provider
+     * only accepts writes from the app that is.  So the ContentResolver
+     * attempt is expected to fail on most devices and root does the work; the
+     * direct attempt is kept first for the case where it does not.
+     */
+    private fun markInboxRead() {
+        val values = android.content.ContentValues().apply {
+            put("read", 1)
+            put("seen", 1)
+        }
+        val direct = runCatching {
+            contentResolver.update(
+                android.provider.Telephony.Sms.Inbox.CONTENT_URI,
+                values,
+                "read = 0 OR seen = 0",
+                null
+            )
+        }.getOrNull() ?: -1
+        if (direct > 0) {
+            Log.i(TAG, "Marked $direct inbox message(s) read")
+            return
+        }
+        val out = RootShell.execForOutput(
+            "content update --uri content://sms/inbox " +
+                "--bind read:i:1 --bind seen:i:1 --where \"read=0 OR seen=0\" 2>&1",
+            timeoutMs = 5000
+        )
+        if (out.isNotBlank()) Log.w(TAG, "markInboxRead: $out")
+    }
+
     /** One report, as a SIP MESSAGE with a JSON body. */
     private fun sendSmsReport(sms: OutboundSms, event: String): Boolean {
         val sip = sipClient
@@ -771,7 +867,7 @@ class GatewayService : Service() {
             return false
         }
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val own = prefs.getString("own_number", "")?.trim().orEmpty().ifEmpty { cfgUser }
+        val own = ownNumberForSub(sms.subId).ifEmpty { cfgUser }
         val body = org.json.JSONObject().apply {
             put("id", sms.id)
             put("event", event)
@@ -783,6 +879,11 @@ class GatewayService : Service() {
             put("deliveredFailed", sms.deliveredFailed)
             if (sms.status.isNotEmpty()) put("status", sms.status)
             if (sms.lastError.isNotEmpty()) put("reason", sms.lastError)
+            // The service centre and the on-air encoding are only known once
+            // the message has actually gone out, so the report is the first
+            // chance to tell the server either.
+            if (sms.smsc.isNotEmpty()) put("smsc", sms.smsc)
+            if (sms.encoding.isNotEmpty()) put("encoding", sms.encoding)
             put("at", smsTimeFormat.format(java.util.Date()))
         }.toString()
 
@@ -795,6 +896,8 @@ class GatewayService : Service() {
         )
         if (sms.status.isNotEmpty()) headers += "X-SMS-Status: ${sms.status}"
         if (sms.lastError.isNotEmpty()) headers += "X-SMS-Reason: ${sms.lastError}"
+        if (sms.smsc.isNotEmpty()) headers += "X-SMS-Smsc: ${sms.smsc}"
+        if (sms.encoding.isNotEmpty()) headers += "X-SMS-Encoding: ${sms.encoding}"
 
         // text/plain, not application/json: chan_sip refuses anything else on
         // an out-of-call MESSAGE — measured, it answered 415.  The body is
@@ -1187,18 +1290,44 @@ class GatewayService : Service() {
 
     // ── Notification ────────────────────────────────────
 
+    /**
+     * Two channels, differing only in importance.
+     *
+     * A foreground service must keep a notification -- Android will not let it
+     * run without one -- so "off" cannot mean "gone".  What it can mean is
+     * IMPORTANCE_MIN, which keeps the icon out of the status bar and drops the
+     * entry to the bottom of the shade.  A channel's importance belongs to the
+     * user once created and cannot be lowered programmatically, so the setting
+     * switches channels rather than editing one.
+     */
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.channel_name),
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = getString(R.string.channel_description)
-            setShowBadge(false)
-        }
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(channel)
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.channel_description)
+                setShowBadge(false)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID_QUIET,
+                getString(R.string.channel_name_quiet),
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = getString(R.string.channel_description_quiet)
+                setShowBadge(false)
+            }
+        )
     }
+
+    /** Which channel the foreground notification should post to right now. */
+    private fun activeChannelId(): String =
+        if (getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("show_notification", true))
+            CHANNEL_ID else CHANNEL_ID_QUIET
 
     private enum class NotifState { OK, WARN, ERROR }
 
@@ -1237,7 +1366,7 @@ class GatewayService : Service() {
             monitorPi
         ).build()
 
-        return Notification.Builder(this, CHANNEL_ID)
+        return Notification.Builder(this, activeChannelId())
             .setContentTitle(statusText)
             .setSmallIcon(icon)
             .setContentIntent(pi)
@@ -1490,6 +1619,7 @@ class GatewayService : Service() {
         private const val INIT_STALE_MS = 90_000L
 
         const val CHANNEL_ID = "gateway_channel"
+        const val CHANNEL_ID_QUIET = "gateway_channel_quiet"
         const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.callagent.gateway.START"
         const val ACTION_STOP = "com.callagent.gateway.STOP"

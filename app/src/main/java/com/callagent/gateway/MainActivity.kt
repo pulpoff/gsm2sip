@@ -58,6 +58,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.callagent.gateway.service.CallLogEntry
 import com.callagent.gateway.service.CallLogStore
+import com.callagent.gateway.sms.SmsOutbox
 import com.callagent.gateway.service.GatewayService
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -521,17 +522,105 @@ class MainActivity : AppCompatActivity() {
      * Settings as a full screen rather than a dialog — there are enough fields
      * that a modal is cramped, and a screen gives room to explain them.
      */
+    // ── Own number, per SIM ─────────────────────────────
+
+    /** One active SIM, as Settings needs to describe it. */
+    private data class SimInfo(val slot: Int, val subId: Int, val caption: String)
+
+    /** Own-number fields on screen, paired with the SIM slot each belongs to.
+     *  Slot -1 is the no-SIM-readable case, bound to the legacy key. */
+    private val ownNumberFields = mutableListOf<Pair<Int, EditText>>()
+
+    private fun ownNumberKey(slot: Int) =
+        if (slot < 0) "own_number" else "own_number_slot_$slot"
+
+    /**
+     * The SIMs that are actually live, in slot order.
+     *
+     * Slots the hardware has but which hold no SIM are deliberately absent:
+     * a triple-SIM handset carrying one SIM needs one number, not three
+     * fields two of which can only ever be wrong.
+     */
+    @SuppressLint("MissingPermission")
+    private fun activeSims(): List<SimInfo> = try {
+        val sm = getSystemService(SubscriptionManager::class.java)
+        val tm = getSystemService(TelephonyManager::class.java)
+        (sm?.activeSubscriptionInfoList ?: emptyList()).map { info ->
+            val slot = info.simSlotIndex
+            val carrier = (info.carrierName ?: info.displayName ?: "").toString().trim()
+            // The IMEI belongs to the radio, so it names the slot; the ICCID
+            // names the card in it.  Either tells two otherwise identical
+            // rows apart, so show whichever the platform will hand over.
+            val ident = runCatching { tm?.getImei(slot) }.getOrNull()
+                ?.takeIf { it.isNotBlank() }?.let { "IMEI $it" }
+                ?: info.iccId?.takeIf { it.isNotBlank() }
+                    ?.let { "ICCID \u2026${it.takeLast(6)}" }
+                ?: ""
+            SimInfo(
+                slot = slot,
+                subId = info.subscriptionId,
+                caption = listOfNotNull(
+                    "SIM ${slot + 1}",
+                    carrier.ifEmpty { null },
+                    ident.ifEmpty { null }
+                ).joinToString("  \u00b7  ")
+            )
+        }.sortedBy { it.slot }
+    } catch (e: Exception) {
+        android.util.Log.w("MainActivity", "Could not enumerate SIMs: ${e.message}")
+        emptyList()
+    }
+
+    private fun buildOwnNumberFields(prefs: android.content.SharedPreferences) {
+        val container = findViewById<LinearLayout>(R.id.llCfgOwnNumbers)
+        container.removeAllViews()
+        ownNumberFields.clear()
+
+        val sims = activeSims()
+        if (sims.isEmpty()) {
+            // Nothing readable — still offer one field on the legacy key, so a
+            // device that will not describe its SIMs stays configurable.
+            val row = layoutInflater.inflate(R.layout.item_sim_number, container, false)
+            val et = row.findViewById<EditText>(R.id.etSimNumber)
+            et.setText(prefs.getString("own_number", ""))
+            row.findViewById<TextView>(R.id.tvSimCaption).text = "No active SIM detected"
+            container.addView(row)
+            ownNumberFields += -1 to et
+            return
+        }
+
+        val lowest = sims.first().slot
+        for (sim in sims) {
+            val row = layoutInflater.inflate(R.layout.item_sim_number, container, false)
+            val et = row.findViewById<EditText>(R.id.etSimNumber)
+            val stored = prefs.getString(ownNumberKey(sim.slot), "").orEmpty()
+            // First run after upgrading there are no per-slot values yet; the
+            // one legacy number belongs to whichever SIM was in use, so offer
+            // it on the lowest active slot rather than making it be retyped.
+            et.setText(
+                stored.ifEmpty {
+                    if (sim.slot == lowest) prefs.getString("own_number", "").orEmpty() else ""
+                }
+            )
+            row.findViewById<TextView>(R.id.tvSimCaption).text = sim.caption
+            container.addView(row)
+            ownNumberFields += sim.slot to et
+        }
+    }
+
     private fun openConfigView() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         findViewById<EditText>(R.id.etCfgServer).setText(prefs.getString("server", "callagent.pro"))
         findViewById<EditText>(R.id.etCfgPort).setText(prefs.getInt("port", 5060).toString())
         findViewById<EditText>(R.id.etCfgUser).setText(prefs.getString("user", ""))
         findViewById<EditText>(R.id.etCfgPass).setText(prefs.getString("pass", ""))
-        findViewById<EditText>(R.id.etCfgOwnNumber).setText(prefs.getString("own_number", ""))
+        buildOwnNumberFields(prefs)
         findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked =
             prefs.getBoolean("autoconnect", true)
         findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked =
             prefs.getBoolean("use_stun", true)
+        findViewById<CheckBox>(R.id.cbCfgNotification).isChecked =
+            prefs.getBoolean("show_notification", true)
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711
@@ -562,9 +651,12 @@ class MainActivity : AppCompatActivity() {
         val port = findViewById<EditText>(R.id.etCfgPort).text.toString().trim().toIntOrNull() ?: 5060
         val user = findViewById<EditText>(R.id.etCfgUser).text.toString().trim()
         val pass = findViewById<EditText>(R.id.etCfgPass).text.toString().trim()
-        val own = findViewById<EditText>(R.id.etCfgOwnNumber).text.toString().trim()
+        // The lowest active SIM's number is the one everything that does not
+        // know which SIM it is dealing with will use.
+        val own = ownNumberFields.firstOrNull()?.second?.text?.toString()?.trim().orEmpty()
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
+        val showNotif = findViewById<CheckBox>(R.id.cbCfgNotification).isChecked
         val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
@@ -582,14 +674,21 @@ class MainActivity : AppCompatActivity() {
             .putString("user", user)
             .putString("pass", pass)
             .putString("own_number", own)
+            .also { ed ->
+                ownNumberFields.forEach { (slot, et) ->
+                    ed.putString(ownNumberKey(slot), et.text.toString().trim())
+                }
+            }
             .putBoolean("autoconnect", auto)
             .putBoolean("use_stun", useStun)
+            .putBoolean("show_notification", showNotif)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
             .apply()
         appendLog(
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
+                "notification=${if (showNotif) "on" else "off"}, " +
                     "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )
         Toast.makeText(this, "Saved — reconnecting", Toast.LENGTH_SHORT).show()
@@ -784,6 +883,92 @@ class MainActivity : AppCompatActivity() {
      * an ordinary app.  This one has root instead, so it reads them from the
      * system rather than holding a permission a gateway has no business with.
      */
+    /**
+     * Everything known about one message, on tapping its row.
+     *
+     * Read from the call-log entry rather than [SmsOutbox]: the outbox is
+     * pruned as soon as a message is finally reported, so for exactly the
+     * messages that succeeded it holds nothing.  The outbox is still consulted
+     * for one that is mid-flight, and for rows written before the log carried
+     * these fields.
+     */
+    private fun showSmsDetails(entry: CallLogEntry) {
+        val outgoing = entry.direction != "IN"
+        val own = getSharedPreferences("gateway", MODE_PRIVATE)
+            .getString("own_number", "").orEmpty()
+
+        // A message still in flight has fresher paperwork in the outbox.
+        val live = entry.smsId.takeIf { it.isNotEmpty() }
+            ?.let { runCatching { SmsOutbox.get(this, it) }.getOrNull() }
+
+        val parts = maxOf(entry.parts, live?.parts ?: 0)
+        val status = entry.status.ifEmpty {
+            when {
+                live == null -> ""
+                live.deliveredOk > 0 -> "delivered"
+                live.sentOk > 0 -> "sent"
+                live.dispatched -> "pending"
+                else -> "queued"
+            }
+        }
+        val error = entry.error.ifEmpty { live?.lastError.orEmpty() }
+
+        fun dash(v: String) = v.ifEmpty { "\u2014" }
+        fun row(label: String, value: String) =
+            label.padEnd(9) + ": " + dash(value) + "\n"
+
+        val stamp = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date(entry.timestamp))
+
+        val header = StringBuilder()
+            .append(row("Direction", if (outgoing) "Outgoing" else "Incoming"))
+            .append(row("From", if (outgoing) own else entry.number))
+            .append(row("To", if (outgoing) entry.number else own))
+            .append(row("SMSC", entry.smsc))
+            .append(row("Date", stamp))
+            .append(row("Format", entry.encoding))
+            .append(
+                row(
+                    "Length",
+                    "${entry.text.length} chars" +
+                        if (parts > 0) ", $parts part${if (parts == 1) "" else "s"}" else ""
+                )
+            )
+
+        // Delivery status is the outbound half of the story; an inbound
+        // message has already arrived by definition, so claiming a state for
+        // it would be inventing one.
+        if (outgoing) {
+            header.append(row("Status", status))
+            if (error.isNotEmpty()) header.append(row("Error", error))
+        }
+
+        val body = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 12f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            setPadding(48, 24, 48, 24)
+            setTextIsSelectable(true)
+            // A blank line is enough to separate the fields from the message;
+            // the fields are aligned and the body is not, so the boundary
+            // reads without a rule.
+            text = header.toString() + "\n" + entry.text.ifEmpty { "(no text)" }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Message detail")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Copy") { _, _ ->
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(
+                    android.content.ClipData.newPlainText("SMS detail", body.text)
+                )
+                Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
     private fun showLinkDetails(mobile: Boolean) {
         val body = TextView(this).apply {
             typeface = android.graphics.Typeface.MONOSPACE
@@ -1128,6 +1313,11 @@ class MainActivity : AppCompatActivity() {
             val sameDay = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(d) == today
             row.findViewById<TextView>(R.id.tvRowTime).text =
                 if (sameDay) hhmm.format(d) else "Earlier"
+            if (sms) {
+                row.isClickable = true
+                row.isFocusable = true
+                row.setOnClickListener { showSmsDetails(e) }
+            }
             homeTrafficList.addView(row)
         }
     }
@@ -1788,7 +1978,12 @@ class MainActivity : AppCompatActivity() {
                 )
                 isClickable = true
                 isFocusable = true
-                setOnClickListener { openDiallerWithNumber(number) }
+                setOnClickListener {
+                    // A message row opens its detail; a call row still dials.
+                    // The green call button next to it dials either way.
+                    if (entry.type == CallLogStore.TYPE_SMS) showSmsDetails(entry)
+                    else openDiallerWithNumber(number)
+                }
             }
 
             // Two-line text block (number + details)
