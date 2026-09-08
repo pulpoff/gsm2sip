@@ -390,6 +390,26 @@ object SipBuilder {
         }
     }
 
+    /**
+     * Turn an INVITE down.  Same shape as 180, with the code and reason the
+     * caller chose, so the server is told why rather than being answered and
+     * bridged to nothing.
+     */
+    fun reject(msg: SipMessage, code: Int, reason: String, toTag: String = tag()): String {
+        val to = msg.to ?: ""
+        val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
+        return buildString {
+            append("SIP/2.0 $code $reason\r\n")
+            append("Via: ${msg.via}\r\n")
+            append("To: $toWithTag\r\n")
+            append("From: ${msg.from}\r\n")
+            append("Call-ID: ${msg.callId}\r\n")
+            append("CSeq: ${msg.cseq}\r\n")
+            append("Server: $userAgent\r\n")
+            append("Content-Length: 0\r\n\r\n")
+        }
+    }
+
     fun ack(
         targetUri: String,
         via: String?, toHeader: String?, fromHeader: String?,

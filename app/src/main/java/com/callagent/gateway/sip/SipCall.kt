@@ -222,6 +222,19 @@ class SipCall(
         Log.i(TAG, "Sent 200 OK for inbound call $callId (RTP port: $localRtpPort)")
     }
 
+    /** Turn down an inbound INVITE we cannot bridge. */
+    fun reject(code: Int, reason: String) {
+        if (state == State.TERMINATED) return
+        val invite = originalInvite ?: return
+
+        val response = SipBuilder.reject(invite, code, reason, localTag)
+        sipClient.sendResponse(response, invite.contactAddress ?: sipClient.serverAddress)
+
+        state = State.TERMINATED
+        Log.i(TAG, "Rejected inbound call $callId with $code $reason")
+        listener?.onCallTerminated(this)
+    }
+
     /** Send ACK for a received 200 OK */
     private fun sendAck(cseq: Int) {
         val uri = remoteContactUri ?: return

@@ -240,21 +240,59 @@ Normalise it before any lookup that keys on the caller.
 
 ### 3. Making outbound calls through the gateway
 
-The gateway dials whatever `X-GSM-Forward` names; the Request-URI of that
-INVITE is ignored. From the dialplan:
+Address the call the same way you would address a message: put the number in
+the Request-URI and dial the peer.
 
 ```ini
 exten => _X.,1,NoOp(Outbound via GSM gateway: ${EXTEN})
-same => n,SIPAddHeader(X-GSM-Forward: +${EXTEN})
-same => n,Dial(SIP/gateway-gw1,60)
+same => n,Dial(SIP/gateway-gw1/${EXTEN},60)
 same => n,Hangup()
 ```
 
-It answers `180 Ringing` as soon as it starts dialling and `200 OK` only when
-the GSM leg connects, so allow enough time in `Dial()` for GSM setup — 60s is
-comfortable, 20s is not. An INVITE that arrives without the header is answered
-on the spot and bridged to nothing, which is the usual sign that
-`SIPAddHeader()` ran on a different channel than the one that was dialled.
+`X-GSM-Forward` does the same job and takes precedence where both are present,
+which is what a dialplan needs when the number it dials is not the number it
+wants called:
+
+```ini
+same => n,SIPAddHeader(X-GSM-Forward: ${EXTEN})
+same => n,Dial(SIP/gateway-gw1,60)
+```
+
+The user part of the Request-URI is only read as a destination when it is one:
+the account name and the SIM's own number are both ignored, since dialling
+either would be a loop, and so is anything that is not a bare number. Under
+`chan_pjsip`, note that `SIPAddHeader()` is silently a no-op — the header form
+there is `Set(PJSIP_HEADER(add,X-GSM-Forward)=${EXTEN})`.
+
+Allow enough time in `Dial()` for GSM setup — 60s is comfortable, 20s is not.
+
+### What the gateway answers with
+
+It reports progress and failure the way a provider does, so the dialplan can
+branch on `${DIALSTATUS}` and `${HANGUPCAUSE}` instead of guessing.
+
+| Situation | Response |
+| --- | --- |
+| INVITE received | `100 Trying` |
+| Dialling the SIM | `180 Ringing` |
+| The mobile answered | `200 OK`, then RTP |
+| Callee busy | `486 Busy Here` |
+| Callee declined | `603 Decline` |
+| No answer, or unreachable | `480 Temporarily Unavailable` |
+| Cancelled at the handset | `487 Request Terminated` |
+| Number barred | `403 Forbidden` |
+| Gateway already on a call | `486 Busy Here` |
+| No destination in the INVITE | `488 Not Acceptable Here` |
+| Anything failing after the answer | `BYE` |
+
+A `488` means the INVITE named no number the gateway could dial — neither a
+header nor a usable Request-URI. Under `chan_sip` that usually means
+`SIPAddHeader()` ran on a different channel than the one that was dialled;
+under `chan_pjsip` it means `SIPAddHeader()` ran at all.
+
+Note that only a call the gateway answered is ended with `BYE`. One that never
+connected is turned down with the final response above, which is the only
+place the server learns why the GSM leg did not come up.
 
 ## SMS over SIP
 

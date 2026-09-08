@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.telecom.Call
+import android.telecom.DisconnectCause
 import android.telephony.PhoneNumberUtils
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
@@ -289,24 +290,69 @@ class CallOrchestrator(
         Log.i(TAG, "Incoming SIP call: ${call.callId}, gsm_forward=${call.gsmForwardNumber}")
 
         if (bridgeState != BridgeState.IDLE) {
-            Log.w(TAG, "Busy — rejecting SIP call")
-            call.hangup()
+            Log.w(TAG, "Busy — rejecting SIP call 486")
+            call.reject(486, "Busy Here")
+            sipClient.removeCall(call.callId)
             return
         }
 
-        val gsmDest = call.gsmForwardNumber
+        val gsmDest = outboundDestination(call)
         if (gsmDest != null) {
             // OUTBOUND flow: Asterisk wants us to dial a GSM number
             handleOutboundFlow(call, gsmDest)
         } else {
-            // Unexpected SIP call without forward header — answer anyway
-            Log.w(TAG, "SIP INVITE without X-GSM-Forward header, answering directly")
-            val rtpPort = allocateRtpPort()
-            call.listener = this
-            call.accept(rtpPort)
-            activeSipCall = call
+            // Nothing to dial: no X-GSM-Forward, and no number in the
+            // Request-URI either.  Answering used to look harmless, but a 200
+            // tells the server the call is up and leaves it bridged to
+            // silence for as long as it cares to wait.  Say we cannot take it.
+            Log.w(TAG, "SIP INVITE names no GSM destination " +
+                "(uri=${call.originalInvite?.requestUri}) — rejecting 488")
+            listener?.onError("INVITE with no GSM destination — rejected")
+            call.reject(488, "Not Acceptable Here")
+            sipClient.removeCall(call.callId)
         }
     }
+
+    /**
+     * The number an INVITE asks us to dial.
+     *
+     * X-GSM-Forward first, then the user part of the Request-URI — the same
+     * order the SMS path resolves a recipient in, so that
+     * Dial(SIP/<peer>/+49...) addresses a call the way it already addresses a
+     * message, and a dialplan does not have to know that calls are the
+     * exception.
+     *
+     * The Request-URI carries the account name whenever the server addresses
+     * the peer rather than a number, and our own MSISDN when it routes the
+     * SIM's DID back to us.  Dialling either would be a loop, so both are
+     * ruled out before what is left is treated as a destination.
+     */
+    private fun outboundDestination(call: SipCall): String? {
+        call.gsmForwardNumber?.trim()?.ifEmpty { null }?.let { return it }
+
+        val invite = call.originalInvite ?: return null
+        val user = invite.requestUri
+            ?.let { invite.extractUser(it) }
+            ?.trim()?.ifEmpty { null } ?: return null
+
+        if (user.equals(sipClient.username, ignoreCase = true)) return null
+        if (digitsOf(user) == digitsOf(inboundSipDestination())) return null
+        if (!looksDialable(user)) return null
+
+        Log.i(TAG, "No X-GSM-Forward — destination taken from the Request-URI")
+        return user
+    }
+
+    /**
+     * Strict on purpose: a Request-URI user is a number only when that is all
+     * it is.  An account name made of digits is already ruled out above; one
+     * with a letter in it was never a number to begin with.
+     */
+    private fun looksDialable(user: String): Boolean =
+        user.all { it.isDigit() || it in "+-.()" } &&
+            digitsOf(user).length >= MIN_DIALABLE_DIGITS
+
+    private fun digitsOf(value: String): String = value.filter { it.isDigit() }
 
     /** Handles termination from both SipClient.Listener and SipCall.Listener */
     override fun onCallTerminated(call: SipCall) {
@@ -449,9 +495,34 @@ class CallOrchestrator(
         }
 
         if (state == Call.STATE_DISCONNECTED && bridgeState != BridgeState.IDLE) {
-            tearDown("GSM call disconnected")
+            tearDown("GSM call disconnected",
+                sipStatusFor(GsmCallManager.lastDisconnectCause))
         }
     }
+
+    /**
+     * The SIP status that says why a GSM leg never connected.
+     *
+     * A provider that cannot complete a call answers the INVITE with a final
+     * response the dialplan can branch on — busy, declined, unobtainable.
+     * We used to send BYE instead, which is not a valid way to end an INVITE
+     * that was never answered: the server replies 481 and then waits out its
+     * own timer, so a busy number, a declined call and a dead SIM all looked
+     * alike and all looked like a timeout.
+     */
+    private fun sipStatusFor(cause: DisconnectCause?): Pair<Int, String> =
+        when (cause?.code) {
+            DisconnectCause.BUSY -> 486 to "Busy Here"
+            DisconnectCause.REJECTED -> 603 to "Decline"
+            DisconnectCause.RESTRICTED -> 403 to "Forbidden"
+            DisconnectCause.MISSED -> 480 to "Temporarily Unavailable"
+            DisconnectCause.CANCELED, DisconnectCause.LOCAL -> 487 to "Request Terminated"
+            DisconnectCause.CONNECTION_MANAGER_NOT_SUPPORTED -> 503 to "Service Unavailable"
+            DisconnectCause.ERROR -> 500 to "Server Internal Error"
+            // REMOTE covers both "they hung up" and the causes the platform
+            // does not break out, so it stays the generic unobtainable.
+            else -> 480 to "Temporarily Unavailable"
+        }
 
     override fun onGsmCallEnded(call: Call) {
         Log.i(TAG, "GSM call ended")
@@ -459,7 +530,8 @@ class CallOrchestrator(
         // but activeGsmCall was never set (call failed before going ACTIVE)
         if (call == activeGsmCall ||
             (activeGsmCall == null && bridgeState != BridgeState.IDLE)) {
-            tearDown("GSM call ended")
+            tearDown("GSM call ended",
+                sipStatusFor(GsmCallManager.lastDisconnectCause))
         }
     }
 
@@ -635,7 +707,7 @@ class CallOrchestrator(
     // ── Teardown ────────────────────────────────────────
 
     @Synchronized
-    private fun tearDown(reason: String) {
+    private fun tearDown(reason: String, sipStatus: Pair<Int, String>? = null) {
         if (bridgeState == BridgeState.IDLE || bridgeState == BridgeState.TEARING_DOWN) return
         bridgeState = BridgeState.TEARING_DOWN
         diallerInitiated = false
@@ -647,9 +719,21 @@ class CallOrchestrator(
 
             activeSipCall?.let {
                 try {
-                    if (it.state != SipCall.State.TERMINATED) it.hangup()
+                    if (it.state != SipCall.State.TERMINATED) {
+                        // An INVITE we accepted is ended with BYE; one we never
+                        // answered has to be turned down with a final response
+                        // instead, which is also the only place the server ever
+                        // learns why the GSM leg did not come up.
+                        if (it.direction == SipCall.Direction.INBOUND &&
+                            it.state != SipCall.State.ANSWERED) {
+                            val (code, phrase) = sipStatus ?: (480 to "Temporarily Unavailable")
+                            it.reject(code, phrase)
+                        } else {
+                            it.hangup()
+                        }
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error hanging up SIP: ${e.message}")
+                    Log.e(TAG, "Error ending SIP call: ${e.message}")
                 }
                 sipClient.removeCall(it.callId)
             }
@@ -813,5 +897,8 @@ class CallOrchestrator(
 
         /** Placeholder shown in settings until a real MSISDN is entered. */
         private const val DEFAULT_OWN_NUMBER = "+49123123123123"
+
+        /** Shortest Request-URI user we will believe is a number to dial. */
+        private const val MIN_DIALABLE_DIGITS = 3
     }
 }

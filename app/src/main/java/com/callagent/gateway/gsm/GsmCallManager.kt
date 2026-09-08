@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.telecom.Call
+import android.telecom.DisconnectCause
 import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.telecom.TelecomManager
@@ -41,6 +42,16 @@ object GsmCallManager {
     // Current active GSM call
     @Volatile var activeCall: Call? = null; private set
     @Volatile var activeCallState: Int = Call.STATE_NEW; private set
+
+    /**
+     * Why the last GSM call ended.
+     *
+     * Read at STATE_DISCONNECTED and kept, because the bridge tears down
+     * afterwards and the Call object may be invalidated by then — and the
+     * cause is what decides the SIP status the server is told.
+     */
+    @Volatile var lastDisconnectCause: DisconnectCause? = null
+        private set
     @Volatile var inCallService: InCallService? = null; private set
 
     @Volatile var listener: Listener? = null
@@ -72,6 +83,7 @@ object GsmCallManager {
         inCallService = service
         activeCall = call
         activeCallState = call.state
+        lastDisconnectCause = null
         // Release the previous call's object; the dedupe only needs to span
         // one call's own disconnect.
         endedCall = null
@@ -94,6 +106,7 @@ object GsmCallManager {
             }
             Call.STATE_DIALING, Call.STATE_CONNECTING -> {
                 Log.i(TAG, "Outgoing GSM call to $number")
+                silenceDialTone()
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active: $number")
@@ -111,6 +124,33 @@ object GsmCallManager {
      *  because tearDown happens to be state-guarded, which is not a property
      *  worth depending on. */
     @Volatile private var endedCall: Call? = null
+
+    /**
+     * Silence the ringback the handset plays while an outgoing call is set up.
+     *
+     * The ALSA voice mutes cannot do this one: they are gated on the HAL's
+     * is_call_active flag and only take effect once capture is running, which
+     * is well after the network has started sending ringback — so the room
+     * hears the first of it.  This goes through AudioManager instead, the same
+     * way the incoming ringtone is silenced in onCallAdded.  A gateway should
+     * be quiet whichever direction the call goes.
+     *
+     * Only for profiles that silence the handset anyway.  The ones that need
+     * the speaker up to capture audio must not have the voice stream muted out
+     * from under them, and on MSM8930 muting this stream kills the
+     * incall_music injection path outright (see enforceVolumes).
+     */
+    private fun silenceDialTone() {
+        if (!profile.silenceLocalAudio) return
+        val service = inCallService ?: return
+        try {
+            val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0)
+            appLog("Outgoing ringback silenced")
+        } catch (e: Exception) {
+            Log.w(TAG, "Ringback silence failed: ${e.message}")
+        }
+    }
 
     private fun notifyCallEnded(call: Call) {
         if (endedCall === call) return
@@ -155,13 +195,22 @@ object GsmCallManager {
                 Log.i(TAG, "GSM call ringing: $number (via state change)")
                 listener?.onIncomingGsmCall(call, number)
             }
+            Call.STATE_DIALING, Call.STATE_CONNECTING -> {
+                silenceDialTone()
+            }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active")
                 configureAudioBridge()
                 listener?.onGsmCallActive(call)
             }
             Call.STATE_DISCONNECTED -> {
-                Log.i(TAG, "GSM call disconnected")
+                lastDisconnectCause = try {
+                    call.details?.disconnectCause
+                } catch (e: Exception) {
+                    Log.w(TAG, "Disconnect cause unavailable: ${e.message}")
+                    null
+                }
+                Log.i(TAG, "GSM call disconnected (cause=${lastDisconnectCause?.code})")
                 notifyCallEnded(call)
                 if (activeCall == call) {
                     activeCall = null
