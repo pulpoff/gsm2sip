@@ -31,6 +31,16 @@ class GsmCallService : InCallService() {
         GsmCallManager.onCallRemoved(call)
     }
 
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        GsmCallManager.onServiceUnbound(this)
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        GsmCallManager.onServiceUnbound(this)
+        super.onDestroy()
+    }
+
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
             val stateStr = when (state) {

@@ -102,10 +102,14 @@ class GatewayService : Service() {
                     broadcastLog("Network lost (ignored — call active)")
                     return
                 }
-                broadcastLog("Network lost, reconnecting...")
-                broadcastStatus("ERROR", "Network lost")
-                updateNotification(NotifState.ERROR, "Offline")
-                reconnect()
+                // Don't reconnect on the strength of onLost alone.  This
+                // fires whenever any network goes away — cellular settling
+                // after boot, mobile data dropping while WiFi carries the
+                // registration perfectly well — and each one rebuilt the
+                // socket and sent a fresh REGISTER for nothing.
+                // checkNetworkChanged() reconnects only if the local IP
+                // actually moved or the registration is genuinely gone.
+                checkNetworkChanged()
             }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 checkNetworkChanged()
@@ -637,6 +641,12 @@ class GatewayService : Service() {
             setPackage(packageName)
             putExtra("state", state)
             putExtra("info", info)
+            // Whether we are actually registered, as a fact rather than as a
+            // string the UI has to recognise.  The pill used to infer this by
+            // comparing info to the literal "SIP registered", so every state
+            // change carrying any other text — "GSM call ended", for one —
+            // read as offline while the registration was perfectly alive.
+            putExtra("registered", sipClient?.registered == true)
             putExtra("online_since", onlineSince)
             putExtra("in_calls", incomingCalls)
             putExtra("in_duration", incomingDurationSec)
@@ -662,8 +672,30 @@ class GatewayService : Service() {
     // ── Network ─────────────────────────────────────────
 
     private fun getLocalIp(): String {
+        // Ask for the address of the network that actually carries our
+        // traffic.  Enumerating interfaces and taking the first non-loopback
+        // IPv4 could hand back the cellular rmnet address while SIP was
+        // running over WiFi — so cellular attaching or detaching read as "the
+        // local IP changed" and forced a reconnect and a fresh REGISTER that
+        // WiFi never needed.  The active network's link address is the one the
+        // socket will bind through.
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val active = cm.activeNetwork
+            val link = active?.let { cm.getLinkProperties(it) }
+            link?.linkAddresses?.firstOrNull { la ->
+                la.address is Inet4Address && !la.address.isLoopbackAddress
+            }?.address?.hostAddress?.let { return it }
+        } catch (e: Exception) {
+            Log.w(TAG, "Active-network IP unavailable: ${e.message}")
+        }
+
+        // Fallback: interface scan, WiFi first for the same reason.
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
+                .toList()
+                .sortedBy { if (it.name.startsWith("wlan")) 0 else 1 }
+                .let { java.util.Collections.enumeration(it) }
             while (interfaces.hasMoreElements()) {
                 val iface = interfaces.nextElement()
                 if (iface.isLoopback || !iface.isUp) continue

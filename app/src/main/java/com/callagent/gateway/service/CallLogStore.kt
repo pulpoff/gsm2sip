@@ -15,6 +15,18 @@ object CallLogStore {
     private const val PREFS = "call_log"
     private const val KEY = "entries"
 
+    /**
+     * Most entries kept.
+     *
+     * Every call end re-parsed the whole array, appended one object and wrote
+     * the lot back as a single SharedPreferences string, and every UI refresh
+     * parsed it again.  Unbounded, that is a string that grows for the life of
+     * the gateway — a few thousand calls in, each call end is rewriting
+     * megabytes.  The list is a recent-calls view; nothing reads past the top
+     * of it.
+     */
+    private const val MAX_ENTRIES = 500
+
     // In-memory cache — avoids re-parsing JSON from SharedPreferences on every access
     @Volatile
     private var cachedEntries: List<CallLogEntry>? = null
@@ -29,6 +41,8 @@ object CallLogStore {
             put("dur", entry.durationSec)
         }
         arr.put(obj)
+        // Oldest first in storage, so trim from the front.
+        while (arr.length() > MAX_ENTRIES) arr.remove(0)
         prefs.edit().putString(KEY, arr.toString()).apply()
         cachedEntries = null // invalidate cache
     }

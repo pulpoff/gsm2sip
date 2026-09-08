@@ -46,6 +46,23 @@ object RootShell {
             reader = BufferedReader(InputStreamReader(proc.inputStream))
             alive = true
 
+            // Drain stderr, or it will eventually block the shell.  su's
+            // stderr is a pipe with a kernel buffer of a few dozen KB and
+            // nothing was ever reading it: any command that does not redirect
+            // — most of the capture diagnostics do not — fills it and then
+            // blocks writing, and the command hangs until its timeout.
+            // Kept separate from stdout rather than merged, so the marker
+            // protocol and every caller that parses output stay unaffected.
+            Thread({
+                try {
+                    BufferedReader(InputStreamReader(proc.errorStream)).forEachLine {
+                        if (it.isNotBlank()) Log.d(TAG, "su stderr: $it")
+                    }
+                } catch (_: Exception) {
+                    // Shell went away; nothing to report.
+                }
+            }, "RootShell-Err").apply { isDaemon = true; start() }
+
             workerThread = Thread({
                 Log.i(TAG, "Root shell worker started")
                 while (alive) {
@@ -78,7 +95,7 @@ object RootShell {
         val command = Command(cmd, CountDownLatch(1))
         commandQueue.put(command)
         if (!command.latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            Log.w(TAG, "Command timed out after ${timeoutMs}ms: ${cmd.take(80)}")
+            resetShell("exec timed out after ${timeoutMs}ms: ${cmd.take(80)}")
             return -1
         }
         return command.exitCode
@@ -91,10 +108,40 @@ object RootShell {
         val command = Command(cmd, CountDownLatch(1))
         commandQueue.put(command)
         if (!command.latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            Log.w(TAG, "Command timed out after ${timeoutMs}ms: ${cmd.take(80)}")
+            resetShell("execForOutput timed out after ${timeoutMs}ms: ${cmd.take(80)}")
             return ""
         }
         return command.output
+    }
+
+    /**
+     * Tear the shell down and release everyone waiting on it.
+     *
+     * Giving up on a command is not enough on its own: the worker is still
+     * blocked in readLine() waiting for that command's marker, so the next
+     * command gets written into the same shell and the worker hands it the
+     * *previous* command's trailing output.  From the first timeout onwards
+     * every result is one command out of step, silently.  The only safe move
+     * is to discard the shell; the next call opens a fresh one.
+     */
+    @Synchronized
+    private fun resetShell(reason: String) {
+        Log.w(TAG, "Resetting root shell — $reason")
+        alive = false
+        workerThread?.interrupt()
+        workerThread = null
+        try { writer?.close() } catch (_: Exception) {}
+        try { reader?.close() } catch (_: Exception) {}
+        try { process?.destroy() } catch (_: Exception) {}
+        process = null
+        writer = null
+        reader = null
+        // Anything still queued was destined for the shell we just discarded.
+        while (true) {
+            val pending = commandQueue.poll() ?: break
+            pending.exitCode = -1
+            pending.latch.countDown()
+        }
     }
 
     private fun executeInternal(command: Command) {
@@ -121,6 +168,12 @@ object RootShell {
             alive = false
         } finally {
             command.latch.countDown()
+        }
+        // readLine() returning null means the shell died mid-command; the
+        // marker never arrived, so the exit code is meaningless and the
+        // stream is no longer in a known state.
+        if (command.exitCode == -1 && !alive) {
+            Log.w(TAG, "Shell ended during: ${command.cmd.take(80)}")
         }
     }
 
@@ -150,7 +203,9 @@ object RootShell {
     fun destroy() {
         alive = false
         workerThread?.interrupt()
+        workerThread = null
         try { writer?.close() } catch (_: Exception) {}
+        try { reader?.close() } catch (_: Exception) {}
         try { process?.destroy() } catch (_: Exception) {}
         process = null
         writer = null

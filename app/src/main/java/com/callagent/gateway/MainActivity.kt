@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -146,6 +147,9 @@ class MainActivity : AppCompatActivity() {
     /** Whether the gateway is actually registered, as opposed to merely
      *  running.  Drives the pill and gates the manual retry. */
     private var gatewayOnline = false
+    /** Registration state as reported by the service, rather than guessed from
+     *  the status text.  See GatewayService.broadcastStatus. */
+    private var sipRegistered = false
     private var inCallOpen = false
     private var inCallOpenTime = 0L
     private var viewBeforeInCall = "dialer"
@@ -229,6 +233,7 @@ class MainActivity : AppCompatActivity() {
                 GatewayService.STATUS_ACTION -> {
                     val state = intent.getStringExtra("state") ?: return
                     val info = intent.getStringExtra("info") ?: ""
+                    sipRegistered = intent.getBooleanExtra("registered", sipRegistered)
                     updateStatus(state, info)
 
                     val newOnlineSince = intent.getLongExtra("online_since", 0L)
@@ -292,6 +297,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Portrait lock, enforced at runtime as well as in the manifest.
+        // A priv-app APK replaced in place is not always re-parsed by
+        // PackageManager, so the manifest's screenOrientation can silently
+        // stay at its previous value (dumpsys reports UNSPECIFIED).  Asking
+        // for it here is immune to that staleness.
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContentView(R.layout.activity_main)
 
         // Tab containers
@@ -532,7 +543,7 @@ class MainActivity : AppCompatActivity() {
         // — it is also the tap target for a manual retry.
         val online = when (state) {
             "STOPPED", "ERROR", "STARTING" -> false
-            "IDLE" -> info == "SIP registered"
+            "IDLE" -> sipRegistered
             else -> true            // any call state means registration held
         }
         gatewayOnline = online
@@ -992,7 +1003,10 @@ class MainActivity : AppCompatActivity() {
             addAction(GatewayService.STATUS_ACTION)
             addAction(GatewayService.LOG_ACTION)
         }
-        registerReceiver(statusReceiver, filter, Context.RECEIVER_EXPORTED)
+        // NOT_EXPORTED: the service sends these with setPackage(), so nothing
+        // outside the app has any business delivering them — exported, any
+        // installed app could feed the UI fabricated status and log lines.
+        registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
 
         // Replay any log messages buffered while activity was paused
         val buffered = GatewayService.drainLogBuffer()
@@ -1958,7 +1972,7 @@ class MainActivity : AppCompatActivity() {
         updateHomeCall(state, info)
 
         val dotColor = when (state) {
-            "IDLE" -> "#16A34A"
+            "IDLE" -> if (sipRegistered) "#16A34A" else "#DC2626"
             // Blue rather than the idle green: a live call should be
             // distinguishable at a glance from merely being registered.
             "BRIDGED" -> "#2563EB"
@@ -1970,7 +1984,7 @@ class MainActivity : AppCompatActivity() {
         statusDot.backgroundTintList = ColorStateList.valueOf(Color.parseColor(dotColor))
 
         val text = when (state) {
-            "IDLE" -> if (info == "SIP registered") "Registered — Ready" else info
+            "IDLE" -> if (sipRegistered) "Registered — Ready" else info
             "BRIDGED" -> "● LIVE CALL — $info"
             "STOPPED" -> "Stopped"
             "ERROR" -> info

@@ -119,7 +119,16 @@ class SipClient(
         s.receiveBufferSize = 65535
         s.sendBufferSize = 65535
         socket = s
-        sendExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "SIP-Send") }
+        sendExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread({
+                // Once for the thread, not once per packet: this was building
+                // a ThreadPolicy object on every SIP message sent.
+                android.os.StrictMode.setThreadPolicy(
+                    android.os.StrictMode.ThreadPolicy.Builder().permitAll().build()
+                )
+                r.run()
+            }, "SIP-Send")
+        }
         // Resolve server DNS now (background thread) so sendTo never blocks on DNS
         resolvedServerAddr = InetAddress.getByName(serverDomain)
         uiLog("Socket bound to $localIp:$localPort")
@@ -128,27 +137,22 @@ class SipClient(
     // ── Send ────────────────────────────────────────────
 
     fun sendTo(data: String, address: Pair<String, Int>) {
-        val callerThread = Thread.currentThread().name
         val executor = sendExecutor
         if (executor == null) {
-            uiLog("sendTo: executor is NULL, caller=$callerThread — sending on new thread")
+            uiLog("sendTo: executor is NULL — sending on new thread")
             Thread({
+                android.os.StrictMode.setThreadPolicy(
+                    android.os.StrictMode.ThreadPolicy.Builder().permitAll().build()
+                )
                 doSend(data, address)
             }, "SIP-FallbackSend").start()
             return
         }
-        executor.execute {
-            Log.d(TAG, "sendTo: caller=$callerThread, sender=${Thread.currentThread().name}")
-            doSend(data, address)
-        }
+        executor.execute { doSend(data, address) }
     }
 
     private fun doSend(data: String, address: Pair<String, Int>) {
         try {
-            // Explicitly permit network on this thread (belt-and-suspenders)
-            android.os.StrictMode.setThreadPolicy(
-                android.os.StrictMode.ThreadPolicy.Builder().permitAll().build()
-            )
             val bytes = data.toByteArray()
             // Use cached address for server to avoid DNS on main thread
             val addr = if (address.first == serverDomain) {

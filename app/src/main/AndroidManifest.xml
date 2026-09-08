@@ -54,6 +54,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:resizeableActivity="false"
         android:theme="@style/Theme.SipGsmGateway"
         tools:targetApi="34">
 
@@ -62,6 +63,7 @@
             android:exported="true"
             android:label="@string/activity_title"
             android:screenOrientation="portrait"
+            android:resizeableActivity="false"
             android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

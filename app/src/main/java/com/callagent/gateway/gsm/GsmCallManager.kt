@@ -72,6 +72,9 @@ object GsmCallManager {
         inCallService = service
         activeCall = call
         activeCallState = call.state
+        // Release the previous call's object; the dedupe only needs to span
+        // one call's own disconnect.
+        endedCall = null
 
         val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
 
@@ -100,6 +103,36 @@ object GsmCallManager {
         }
     }
 
+    /** The call already reported as ended, so it is reported exactly once.
+     *
+     *  A disconnect arrives twice: once as a STATE_DISCONNECTED callback and
+     *  again as onCallRemoved.  Both used to fire onGsmCallEnded, so the
+     *  orchestrator tore the bridge down twice for one call — harmless only
+     *  because tearDown happens to be state-guarded, which is not a property
+     *  worth depending on. */
+    @Volatile private var endedCall: Call? = null
+
+    private fun notifyCallEnded(call: Call) {
+        if (endedCall === call) return
+        endedCall = call
+        listener?.onGsmCallEnded(call)
+    }
+
+    /**
+     * Telecom has unbound the InCallService.
+     *
+     * [inCallService] is a static reference to a Service — a full Context —
+     * and nothing ever cleared it, so every unbind/rebind cycle (dialer role
+     * change, service restart) left the previous instance pinned for the life
+     * of the process.
+     */
+    fun onServiceUnbound(service: InCallService) {
+        if (inCallService === service) {
+            inCallService = null
+            Log.i(TAG, "InCallService unbound")
+        }
+    }
+
     fun onCallRemoved(call: Call) {
         Log.i(TAG, "GSM call removed")
         if (activeCall == call) {
@@ -107,7 +140,7 @@ object GsmCallManager {
             activeCallState = Call.STATE_DISCONNECTED
         }
         restoreAudio()
-        listener?.onGsmCallEnded(call)
+        notifyCallEnded(call)
     }
 
     fun onCallStateChanged(call: Call, state: Int) {
@@ -129,7 +162,7 @@ object GsmCallManager {
             }
             Call.STATE_DISCONNECTED -> {
                 Log.i(TAG, "GSM call disconnected")
-                listener?.onGsmCallEnded(call)
+                notifyCallEnded(call)
                 if (activeCall == call) {
                     activeCall = null
                 }

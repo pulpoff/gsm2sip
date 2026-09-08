@@ -16,6 +16,9 @@ import com.callagent.gateway.sip.SipCall
 import com.callagent.gateway.sip.SipClient
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Orchestrates the bidirectional GSM ↔ SIP bridge.
@@ -62,6 +65,34 @@ class CallOrchestrator(
     private var sipCallRetries = 0
     private val MAX_SIP_RETRIES = 2
 
+    /** One thread for every deferred bridge action, instead of a fresh Thread
+     *  per dial, per INVITE and per retry. */
+    private val timers: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "bridge-timers").apply { isDaemon = true }
+        }
+
+    /** Bumped every time the bridge returns to IDLE.
+     *
+     *  Timers used to check nothing but [bridgeState], which is shared by every
+     *  call there has ever been.  A dial that failed at t+5s left its 45s
+     *  timeout running; a different call answered at t+20s was still setting up
+     *  when that timer fired, saw a non-IDLE state and tore the new call down
+     *  as "GSM dial timeout".  Each timer now captures the generation it was
+     *  scheduled in and does nothing if the bridge has moved on since. */
+    @Volatile private var generation = 0L
+
+    /** Run [action] after [delayMs], unless the bridge has moved on. */
+    private fun schedule(delayMs: Long, action: () -> Unit) {
+        val gen = generation
+        timers.schedule({
+            if (generation != gen) return@schedule
+            try { action() } catch (e: Exception) {
+                Log.w(TAG, "Timer action failed: ${e.message}")
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
     /** Current bridge state */
     @Volatile var bridgeState: BridgeState = BridgeState.IDLE
         private set
@@ -95,6 +126,7 @@ class CallOrchestrator(
         tearDown("Orchestrator stopped")
         sipClient.listener = null
         GsmCallManager.listener = null
+        timers.shutdownNow()
     }
 
     /**
@@ -232,13 +264,12 @@ class CallOrchestrator(
         // Timeout: if GSM doesn't go active within 45s, tear down.
         // On cold boot, InCallService may not be bound, so call events
         // never arrive and the bridge gets stuck in GSM_DIALING.
-        Thread({
-            Thread.sleep(GSM_DIAL_TIMEOUT_MS)
+        schedule(GSM_DIAL_TIMEOUT_MS) {
             if (bridgeState == BridgeState.GSM_DIALING) {
                 Log.w(TAG, "GSM dial timeout — no call events in ${GSM_DIAL_TIMEOUT_MS / 1000}s")
                 tearDown("GSM dial timeout")
             }
-        }, "GSM-Dial-Timeout").start()
+        }
     }
 
     // ── SipClient.Listener ──────────────────────────────
@@ -292,12 +323,12 @@ class CallOrchestrator(
             activeSipCall = null
             sipClient.removeCall(call.callId)
             // Retry after a short delay to let any transient issue settle
-            Thread({
-                try { Thread.sleep(1000) } catch (_: InterruptedException) { return@Thread }
-                if (bridgeState != BridgeState.SIP_CALLING && bridgeState != BridgeState.SIP_RINGING) return@Thread
+            schedule(1000) {
+                if (bridgeState != BridgeState.SIP_CALLING &&
+                    bridgeState != BridgeState.SIP_RINGING) return@schedule
                 activeGsmCall?.let { handleInboundFlow(it) }
                     ?: Log.e(TAG, "SIP retry: GSM call gone, aborting")
-            }, "SIP-Retry-$sipCallRetries").start()
+            }
             return
         }
 
@@ -519,13 +550,12 @@ class CallOrchestrator(
         Log.i(TAG, "SIP INVITE sent to Asterisk (caller=$callerNumber, rtp=$rtpPort)")
 
         // Timeout: if Asterisk doesn't answer within 30s, tear down
-        Thread({
-            Thread.sleep(SIP_CALL_TIMEOUT_MS)
+        schedule(SIP_CALL_TIMEOUT_MS) {
             if (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) {
                 Log.w(TAG, "SIP call timeout — Asterisk didn't answer in ${SIP_CALL_TIMEOUT_MS / 1000}s")
                 tearDown("Asterisk not answering")
             }
-        }, "SIP-Timeout").start()
+        }
     }
 
     // ── Outbound flow (SIP → GSM) ──────────────────────
@@ -551,6 +581,12 @@ class CallOrchestrator(
 
     private fun startRtp(localPort: Int, remoteAddr: String, remotePort: Int,
                          payloadType: Int = RtpPacket.PT_G722) {
+        // Not @Synchronized, deliberately: tearDown() is, and it is reached
+        // from the Telecom callback on the main thread, so sharing a monitor
+        // with this method — which blocks for as long as AudioRecord takes to
+        // come up — would hold the UI thread for seconds.  The generation
+        // counter gives the same protection without the lock.
+        val gen = generation
         // Re-assert RECORD_AUDIO appops SYNCHRONOUSLY before AudioRecord
         // creation.  Must complete before RtpSession.start() so AudioFlinger
         // sees "allow" when the record thread begins reading.  Running async
@@ -558,6 +594,10 @@ class CallOrchestrator(
         // the appops command finished.  RtpSession also periodically re-asserts
         // appops in its timeoutLoop for screen-off resilience.
         forceAllowRecordAudio()
+        if (generation != gen) {
+            Log.w(TAG, "Bridge torn down before RTP setup — not starting")
+            return
+        }
 
         activeRtpSession?.stop()
         val session = RtpSession(context, localPort, remoteAddr, remotePort, payloadType)
@@ -580,8 +620,16 @@ class CallOrchestrator(
                 listener?.onRtpStats(stats)
             }
         }
-        session.start()
+        // Published before start() so a teardown arriving mid-setup can find
+        // and stop it rather than leaving an orphaned session holding the
+        // audio devices and the RTP socket.
         activeRtpSession = session
+        session.start()
+        if (generation != gen) {
+            Log.w(TAG, "Bridge torn down during RTP start — stopping orphaned session")
+            session.stop()
+            if (activeRtpSession === session) activeRtpSession = null
+        }
     }
 
     // ── Teardown ────────────────────────────────────────
@@ -622,6 +670,7 @@ class CallOrchestrator(
             pendingRtpAddr = null
         } finally {
             bridgeState = BridgeState.IDLE
+            generation++
             lastStateChangeTime = System.currentTimeMillis()
             listener?.onStateChanged(BridgeState.IDLE, reason)
             Log.i(TAG, "Bridge torn down: $reason")
@@ -630,9 +679,20 @@ class CallOrchestrator(
 
     // ── Utility ─────────────────────────────────────────
 
+    /**
+     * Pick a free even UDP port for RTP.
+     *
+     * The scan starts at a random offset rather than always at 30000.  The
+     * port is probed by binding and closing, so there is a gap before
+     * RtpSession binds it for real; starting from the same place every time
+     * meant consecutive calls raced each other for the very same port, which
+     * is the one way that gap reliably loses.
+     */
     private fun allocateRtpPort(): Int {
-        // Find a free UDP port in the 30000-40000 range
-        for (port in 30000..40000 step 2) {
+        val span = (RTP_PORT_MAX - RTP_PORT_MIN) / 2
+        val start = (Math.random() * span).toInt()
+        for (i in 0 until span) {
+            val port = RTP_PORT_MIN + ((start + i) % span) * 2
             try {
                 DatagramSocket(null).use { sock ->
                     sock.reuseAddress = true
@@ -661,6 +721,21 @@ class CallOrchestrator(
     private fun forceAllowRecordAudio() {
         try {
             val pkg = context.packageName
+            val uidProbe = if (Build.VERSION.SDK_INT >= 29) "--uid " else ""
+            // This sits directly between the call being answered and the first
+            // frame of audio, so ask before acting: one `appops get` costs a
+            // single root round-trip, where the grant sequence below is eight
+            // commands and forks an app_process for each of pm/appops/cmd.
+            // In the steady state the permission is already allowed and this
+            // returns immediately.
+            val probe = RootShell.execForOutput(
+                "appops get ${uidProbe}$pkg RECORD_AUDIO 2>&1"
+            )
+            if (probe.contains("allow", ignoreCase = true)) {
+                Log.i(TAG, "appops RECORD_AUDIO already allow — skipping grant")
+                return
+            }
+            Log.w(TAG, "appops RECORD_AUDIO not allowed [$probe] — granting")
             val t0 = System.currentTimeMillis()
             // Capture all output (2>&1) for diagnosis.  appops get is LAST
             // so exit code reflects verification, not a stray killall.
@@ -720,6 +795,7 @@ class CallOrchestrator(
         pendingRtpAddr = null
         diallerInitiated = false
         bridgeState = BridgeState.IDLE
+        generation++
         lastStateChangeTime = System.currentTimeMillis()
         listener?.onStateChanged(BridgeState.IDLE, reason)
         Log.i(TAG, "Bridge force-reset complete: $reason")
@@ -731,6 +807,9 @@ class CallOrchestrator(
         private const val GSM_DIAL_TIMEOUT_MS = 45_000L
         /** If bridge is non-IDLE for this long, consider it stale */
         private const val STALE_STATE_TIMEOUT_MS = 60_000L
+
+        private const val RTP_PORT_MIN = 30000
+        private const val RTP_PORT_MAX = 40000
 
         /** Placeholder shown in settings until a real MSISDN is entered. */
         private const val DEFAULT_OWN_NUMBER = "+49123123123123"
