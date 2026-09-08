@@ -68,6 +68,15 @@ class GatewayService : Service() {
     private var currentCallIncoming = true
     private var currentCallNumber = ""
 
+    /** When the call first appeared, bridged or not.
+     *
+     *  currentCallStart only becomes non-zero once the bridge reaches BRIDGED,
+     *  so every attempt that failed before that — an inbound call the SIP side
+     *  rejected, an outbound number that never connected, a caller who hung up
+     *  while it was ringing — used to leave no trace in the log at all.  Those
+     *  are the calls most worth having a record of. */
+    private var currentAttemptStart = 0L
+
     /** Prevents concurrent startGateway / reconnect threads */
     private val initializing = AtomicBoolean(false)
 
@@ -883,6 +892,7 @@ class GatewayService : Service() {
         outgoingCalls = totals.outCalls
         outgoingDurationSec = totals.outDurationSec
         currentCallStart = 0L
+        currentAttemptStart = 0L
 
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "callagent.pro") ?: ""
@@ -1043,10 +1053,12 @@ class GatewayService : Service() {
                     CallOrchestrator.BridgeState.GSM_RINGING -> {
                         currentCallIncoming = true
                         currentCallNumber = info.removePrefix("GSM call from ")
+                        if (currentAttemptStart == 0L) currentAttemptStart = System.currentTimeMillis()
                     }
                     CallOrchestrator.BridgeState.GSM_DIALING -> {
                         currentCallIncoming = false
                         currentCallNumber = info.removePrefix("Dialing ")
+                        if (currentAttemptStart == 0L) currentAttemptStart = System.currentTimeMillis()
                     }
                     else -> {}
                 }
@@ -1056,17 +1068,32 @@ class GatewayService : Service() {
                     currentCallStart = System.currentTimeMillis()
                     if (currentCallIncoming) incomingCalls++ else outgoingCalls++
                 }
-                if (state == CallOrchestrator.BridgeState.IDLE && currentCallStart != 0L) {
-                    val dur = (System.currentTimeMillis() - currentCallStart) / 1000
-                    if (currentCallIncoming) incomingDurationSec += dur
-                    else outgoingDurationSec += dur
+                if (state == CallOrchestrator.BridgeState.IDLE &&
+                    (currentCallStart != 0L || currentAttemptStart != 0L)
+                ) {
+                    // A zero duration is how the list already renders an
+                    // unconnected call ("Not connected", red dash), so a failed
+                    // attempt needs no new field — only an entry.
+                    val dur =
+                        if (currentCallStart != 0L)
+                            (System.currentTimeMillis() - currentCallStart) / 1000
+                        else 0L
+                    if (currentCallStart != 0L) {
+                        if (currentCallIncoming) incomingDurationSec += dur
+                        else outgoingDurationSec += dur
+                    }
                     CallLogStore.addEntry(this@GatewayService, CallLogEntry(
                         direction = if (currentCallIncoming) "IN" else "OUT",
+                        // Timestamp the call from when it arrived or was dialled,
+                        // not from when the bridge came up — an attempt that never
+                        // bridged has no other time to show.
                         number = currentCallNumber,
-                        timestamp = currentCallStart,
+                        timestamp = if (currentAttemptStart != 0L) currentAttemptStart
+                                    else currentCallStart,
                         durationSec = dur
                     ))
                     currentCallStart = 0L
+                    currentAttemptStart = 0L
                     currentCallNumber = ""
                 }
 
