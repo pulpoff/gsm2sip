@@ -128,40 +128,46 @@ build_apk() {
 
 # ── Build Magisk module ─────────────────────────────
 
-build_tinymix() {
-    echo ""
-    echo "=== Building tinymix (ARM64 static binary) ==="
-    echo ""
-
+# Build one tinymix for one ABI.  $1 = GOARCH, $2 = expected `file` signature,
+# $3 = output path.
+build_tinymix_arch() {
+    local GOARCH_="$1" SIG="$2" OUT="$3"
     local TINYMIX_SRC="$SCRIPT_DIR/tools/tinymix"
-    local TINYMIX_BIN="$SCRIPT_DIR/magisk/tinymix"
 
-    # If a pre-built binary already exists in magisk/, use it
-    if [ -f "$TINYMIX_BIN" ]; then
-        local ARCH=$(file "$TINYMIX_BIN" 2>/dev/null)
-        if echo "$ARCH" | grep -q "ARM aarch64"; then
-            echo "Using existing tinymix binary: $TINYMIX_BIN"
+    # A pre-built binary of the right architecture is good enough
+    if [ -f "$OUT" ] && file "$OUT" 2>/dev/null | grep -q "$SIG"; then
+        echo "Using existing tinymix: $OUT"
+        return 0
+    fi
+
+    if command -v go &>/dev/null && [ -f "$TINYMIX_SRC/main.go" ]; then
+        echo "Building tinymix for $GOARCH_..."
+        (cd "$TINYMIX_SRC" && GOOS=linux GOARCH="$GOARCH_" GOARM=7 CGO_ENABLED=0 \
+            go build -ldflags='-s -w' -o "$OUT" .)
+        if [ -f "$OUT" ]; then
+            chmod 755 "$OUT"
+            echo "tinymix built: $OUT ($(du -h "$OUT" | cut -f1))"
             return 0
         fi
     fi
 
-    # Try to build with Go (cross-compiles to ARM64 easily)
-    if command -v go &>/dev/null; then
-        if [ -d "$TINYMIX_SRC" ] && [ -f "$TINYMIX_SRC/main.go" ]; then
-            echo "Building tinymix with Go..."
-            (cd "$TINYMIX_SRC" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-                go build -ldflags='-s -w' -o "$TINYMIX_BIN" .)
-            if [ -f "$TINYMIX_BIN" ]; then
-                chmod 755 "$TINYMIX_BIN"
-                echo "tinymix built: $TINYMIX_BIN ($(du -h "$TINYMIX_BIN" | cut -f1))"
-                return 0
-            fi
-        fi
-    fi
-
-    echo "WARNING: Could not build tinymix. ABOX mixer controls may not work."
-    echo "         Install Go or place a pre-built ARM64 tinymix at: $TINYMIX_BIN"
+    echo "WARNING: could not build tinymix for $GOARCH_ — mixer controls will"
+    echo "         not work on $GOARCH_ devices.  Install Go, or drop a"
+    echo "         pre-built binary at: $OUT"
     return 1
+}
+
+build_tinymix() {
+    echo ""
+    echo "=== Building tinymix (static, one per ABI) ==="
+    echo ""
+
+    # Two builds, because the ALSA control ioctls encode the size of structs
+    # that contain `long`: an arm64 binary talks a different ioctl ABI than an
+    # armeabi-v7a one, and neither works on the other's kernel.  install.sh
+    # picks the matching one at flash time.
+    build_tinymix_arch arm64 "ARM aarch64" "$SCRIPT_DIR/magisk/tinymix"
+    build_tinymix_arch arm   "ELF 32-bit.*ARM" "$SCRIPT_DIR/magisk/tinymix32"
 }
 
 build_magisk() {
@@ -190,6 +196,24 @@ build_magisk() {
 # ── Install to device (if connected via ADB) ────────
 
 install_to_device() {
+    # Installing to "whatever is plugged in" is the wrong default once there is
+    # more than one phone on the bus — the gateway has been installed onto the
+    # wrong handset this way.  SKIP_INSTALL=1 builds the artifacts and stops.
+    if [ -n "${SKIP_INSTALL:-}" ]; then
+        echo ""
+        echo "SKIP_INSTALL set — built artifacts only, nothing installed."
+        return 0
+    fi
+
+    local COUNT
+    COUNT=$(adb devices 2>/dev/null | grep -c "device$")
+    if [ "${COUNT:-0}" -gt 1 ]; then
+        echo ""
+        echo "$COUNT devices connected — refusing to guess which one to install to."
+        echo "Install explicitly:  adb -s <serial> install -r gateway.apk"
+        return 0
+    fi
+
     if command -v adb &>/dev/null && adb devices 2>/dev/null | grep -q "device$"; then
         echo ""
         echo "=== Device detected — installing ==="

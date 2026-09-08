@@ -1,6 +1,11 @@
-// Minimal tinymix for Android ARM64 — cross-compiled in Go.
+// Minimal tinymix for Android — cross-compiled in Go.
 // Interacts with ALSA mixer via /dev/snd/controlC0 ioctls.
 // No external dependencies (no libtinyalsa needed).
+//
+// The parts of the control ABI that depend on the word size — two struct
+// layouts, three ioctl request numbers and the `long` stride — live in
+// abi64.go and abi32.go.  Build for the device's ABI, not the host's:
+// GOARCH=arm64 for arm64-v8a, GOARCH=arm GOARM=7 for armeabi-v7a.
 //
 // Usage:
 //   tinymix                     — list all controls
@@ -22,21 +27,17 @@ import (
 	"unsafe"
 )
 
-// ALSA ioctl numbers for aarch64 (same as x86_64)
+// ALSA ioctl numbers whose struct is the same width on every ABI.
 // _IOC(dir, type, nr, size) = (dir << 30) | (size << 16) | (type << 8) | nr
-// ALSA control type = 'U' = 0x55
+// ALSA control type = 'U' = 0x55.  The word-size-dependent ones — ELEM_LIST,
+// ELEM_READ and ELEM_WRITE — are in abi64.go / abi32.go.
 const (
 	// _IOR('U', 0x01, snd_ctl_card_info) — 376 bytes
 	SNDRV_CTL_IOCTL_CARD_INFO = 0x81785501
-	// _IOWR('U', 0x10, snd_ctl_elem_list) — 80 bytes on 64-bit
-	SNDRV_CTL_IOCTL_ELEM_LIST = 0xC0505510
-	// _IOWR('U', 0x11, snd_ctl_elem_info) — 272 bytes
+	// _IOWR('U', 0x11, snd_ctl_elem_info) — 272 bytes.  snd_ctl_elem_info
+	// holds no long: its value union is pinned to 128 bytes by reserved[128]
+	// and dimen is 8 either way, so it is 272 on 32-bit too.
 	SNDRV_CTL_IOCTL_ELEM_INFO = 0xC1105511
-	// _IOWR('U', 0x12, snd_ctl_elem_value) — 1224 bytes on 64-bit
-	// (long value[128] = 1024 bytes on aarch64)
-	SNDRV_CTL_IOCTL_ELEM_READ = 0xC4C85512
-	// _IOWR('U', 0x13, snd_ctl_elem_value) — 1224 bytes on 64-bit
-	SNDRV_CTL_IOCTL_ELEM_WRITE = 0xC4C85513
 )
 
 // ALSA element types
@@ -82,16 +83,6 @@ func setName(dst *[44]byte, name string) {
 		dst[i] = 0
 	}
 	copy(dst[:], name)
-}
-
-// snd_ctl_elem_list — 80 bytes on 64-bit
-type elemList struct {
-	Offset  uint32
-	Space   uint32
-	Used    uint32
-	Count   uint32
-	PidsPtr uint64 // pointer to elemID array
-	_       [80 - 4*4 - 8]byte
 }
 
 // snd_ctl_elem_info — 272 bytes
@@ -201,16 +192,40 @@ func findEnumIndex(fd int, id elemID, info elemInfo, name string) (uint32, bool)
 	return 0, false
 }
 
-// snd_ctl_elem_value — 1224 bytes on 64-bit (aarch64)
-// Layout: id(64) + indirect(4) + pad(4) + value_union(1024) + tstamp+reserved(128)
-// The value union is 1024 bytes because long value[128] on 64-bit.
-// BOOLEAN/INTEGER use long (8 bytes each), ENUMERATED uses uint (4 bytes each).
-type elemValue struct {
-	ID       elemID     // 64
-	Indirect uint32     // 4
-	_pad     uint32     // 4 (alignment padding to 8)
-	Value    [1024]byte // 1024 (value union: long value[128] on 64-bit)
-	_rest    [128]byte  // 128 (struct timespec + reserved = 128 always)
+// BOOLEAN and INTEGER values are `long` in snd_ctl_elem_value, so they are
+// 8 bytes wide on arm64 and 4 on armeabi-v7a.  ENUMERATED is unsigned int and
+// INTEGER64 is long long, both fixed at 4 and 8 everywhere.
+func putLong(buf []byte, i uint32, v int64) {
+	off := i * longSize
+	if longSize == 8 {
+		binary.LittleEndian.PutUint64(buf[off:], uint64(v))
+	} else {
+		binary.LittleEndian.PutUint32(buf[off:], uint32(v))
+	}
+}
+
+func getLong(buf []byte, i uint32) int64 {
+	off := i * longSize
+	if longSize == 8 {
+		return int64(binary.LittleEndian.Uint64(buf[off:]))
+	}
+	return int64(int32(binary.LittleEndian.Uint32(buf[off:])))
+}
+
+// valueCapacity is how many values of a given type the union actually holds.
+// Reading past it would run off the end of the Go array — which on 32-bit is
+// half the size — so every loop over info.Count is clamped to it.
+func valueCapacity(t uint32) uint32 {
+	switch t {
+	case SND_CTL_ELEM_TYPE_INTEGER64:
+		return 64 // long long value[64]
+	case SND_CTL_ELEM_TYPE_ENUMERATED:
+		return 128 // unsigned int item[128]
+	case SND_CTL_ELEM_TYPE_BYTES:
+		return 512 // unsigned char data[512]
+	default:
+		return longCount // long value[128]
+	}
 }
 
 func ioctl(fd int, req uint, arg unsafe.Pointer) error {
@@ -247,7 +262,7 @@ func getElemIDs(fd int, count uint32) ([]elemID, error) {
 	var list elemList
 	list.Offset = 0
 	list.Space = count
-	list.PidsPtr = uint64(uintptr(unsafe.Pointer(&ids[0])))
+	list.setPids(uintptr(unsafe.Pointer(&ids[0])))
 	err := ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, unsafe.Pointer(&list))
 	if err != nil {
 		return nil, err
@@ -273,25 +288,28 @@ func setElemValue(fd int, id elemID, info elemInfo, valueStr string) error {
 	var val elemValue
 	val.ID = id
 
+	count := info.Count
+	if limit := valueCapacity(info.Type); count > limit {
+		count = limit
+	}
+
 	switch info.Type {
 	case SND_CTL_ELEM_TYPE_BOOLEAN:
-		// On 64-bit, boolean uses long (8 bytes per value)
-		v := uint64(0)
+		v := int64(0)
 		if valueStr == "1" || strings.EqualFold(valueStr, "on") || strings.EqualFold(valueStr, "true") {
 			v = 1
 		}
-		for i := uint32(0); i < info.Count; i++ {
-			binary.LittleEndian.PutUint64(val.Value[i*8:], v)
+		for i := uint32(0); i < count; i++ {
+			putLong(val.Value[:], i, v)
 		}
 
 	case SND_CTL_ELEM_TYPE_INTEGER:
-		// On 64-bit, integer uses long (8 bytes per value)
 		n, err := strconv.ParseInt(valueStr, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid integer: %s", valueStr)
 		}
-		for i := uint32(0); i < info.Count; i++ {
-			binary.LittleEndian.PutUint64(val.Value[i*8:], uint64(n))
+		for i := uint32(0); i < count; i++ {
+			putLong(val.Value[:], i, n)
 		}
 
 	case SND_CTL_ELEM_TYPE_ENUMERATED:
@@ -306,7 +324,7 @@ func setElemValue(fd int, id elemID, info elemInfo, valueStr string) error {
 			}
 			n = uint64(idx)
 		}
-		for i := uint32(0); i < info.Count; i++ {
+		for i := uint32(0); i < count; i++ {
 			binary.LittleEndian.PutUint32(val.Value[i*4:], uint32(n))
 		}
 
@@ -319,20 +337,16 @@ func setElemValue(fd int, id elemID, info elemInfo, valueStr string) error {
 
 func formatValue(fd int, info elemInfo, val elemValue) string {
 	parts := make([]string, 0, info.Count)
-	for i := uint32(0); i < info.Count && i < 128; i++ {
+	for i := uint32(0); i < info.Count && i < valueCapacity(info.Type); i++ {
 		switch info.Type {
 		case SND_CTL_ELEM_TYPE_BOOLEAN:
-			// On 64-bit, boolean uses long (8 bytes per value)
-			v := binary.LittleEndian.Uint64(val.Value[i*8:])
-			if v != 0 {
+			if getLong(val.Value[:], i) != 0 {
 				parts = append(parts, "On")
 			} else {
 				parts = append(parts, "Off")
 			}
 		case SND_CTL_ELEM_TYPE_INTEGER:
-			// On 64-bit, integer uses long (8 bytes per value)
-			v := int64(binary.LittleEndian.Uint64(val.Value[i*8:]))
-			parts = append(parts, fmt.Sprintf("%d", v))
+			parts = append(parts, fmt.Sprintf("%d", getLong(val.Value[:], i)))
 		case SND_CTL_ELEM_TYPE_ENUMERATED:
 			// Enumerated uses unsigned int (4 bytes per value)
 			v := binary.LittleEndian.Uint32(val.Value[i*4:])
