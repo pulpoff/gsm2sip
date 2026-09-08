@@ -138,7 +138,7 @@ Only the Magisk module needs to be installed — it includes the APK and handles
 4. **Configure SIP**: open Settings in the app (the gear, top right) and enter
    your SIP server address, port, username and password
 5. **Own Number**: Enter the SIM's own number in international format, e.g.
-   `+4915215320372`.  This is sent as the SIP destination so the server can
+   `+4915112345678`.  This is sent as the SIP destination so the server can
    route on the number that was dialled, the same way a VoIP router sends the
    DID.  Leaving it unset makes the gateway address its own extension,
    which most servers route straight back to the device — the call then loops
@@ -227,12 +227,12 @@ re-grants them over root at bring-up if they are missing.
 One MESSAGE per message, already reassembled from its parts:
 
 ```
-MESSAGE sip:+4915215320372@example.com SIP/2.0
+MESSAGE sip:+4915112345678@example.com SIP/2.0
 From: <sip:+4917098765432@example.com>;tag=gw123456789
-To: <sip:+4915215320372@example.com>
+To: <sip:+4915112345678@example.com>
 X-SMS-Id: 550e8400-e29b-41d4-a716-446655440000
 X-SMS-From: +4917098765432
-X-SMS-To: +4915215320372
+X-SMS-To: +4915112345678
 X-SMS-Received: 2026-09-08T16:20:31Z
 X-SMS-Parts: 1
 X-SMS-Sim-Sub: 1

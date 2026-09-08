@@ -108,7 +108,7 @@
         android:id="@+id/etOwnNumber"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="international, e.g. +4915215320372"
+        android:hint="international, e.g. +4915112345678"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_hint"
         android:background="@drawable/input_bg"
