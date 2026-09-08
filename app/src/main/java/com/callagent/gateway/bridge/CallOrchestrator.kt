@@ -162,7 +162,7 @@ class CallOrchestrator(
     /**
      * The destination always goes out in international form.  What we have to
      * start from varies: the platform may hand back E.164, the settings field
-     * may hold a national number ("015215320372"), and either may use a 00
+     * may hold a national number ("015112345678"), and either may use a 00
      * prefix.  PhoneNumberUtils resolves the national case against the SIM's
      * country rather than us guessing a dialling code.
      *
