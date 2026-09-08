@@ -665,6 +665,28 @@ class MainActivity : AppCompatActivity() {
      * WiFi carries SIP and RTP.  A problem on either shows up as a broken call,
      * so it is worth seeing them side by side.
      */
+    /**
+     * Signal strength in dBm, or null when the modem has no usable reading.
+     *
+     * SignalStrength.getCellSignalStrengths() is API 29 and minSdk here is 26,
+     * so below Q the method does not exist and calling it throws
+     * NoSuchMethodError.  That is an Error, not an Exception, so the try/catch
+     * around the call sites never contained it — on Android 9 this took the
+     * whole Activity down in onCreate, and the app could not be opened at all.
+     *
+     * The pre-Q reading is getGsmSignalStrength(), which reports ASU rather
+     * than dBm: 0..31 maps linearly onto -113..-51 dBm, and 99 means unknown.
+     */
+    @Suppress("DEPRECATION")
+    private fun signalDbm(ss: android.telephony.SignalStrength?): Int? {
+        if (ss == null) return null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return ss.cellSignalStrengths.firstOrNull()?.dbm
+        }
+        val asu = ss.gsmSignalStrength
+        return if (asu in 0..31) -113 + 2 * asu else null
+    }
+
     @SuppressLint("MissingPermission")
     private fun refreshNetworkInfo() {
         if (!::tvNetMobile.isInitialized) return
@@ -683,7 +705,7 @@ class MainActivity : AppCompatActivity() {
                 android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN -> "—"
                 else -> "?"
             }
-            val dbm = tm.signalStrength?.cellSignalStrengths?.firstOrNull()?.dbm
+            val dbm = signalDbm(tm.signalStrength)
             if (dbm != null && dbm != Int.MAX_VALUE) "$type $name ${dbm}dBm"
             else "$type $name"
         } catch (e: Exception) {
@@ -808,11 +830,15 @@ class MainActivity : AppCompatActivity() {
             appendLine("Roaming      : ${if (tm.isNetworkRoaming) "yes" else "no"}")
             appendLine("Data network : ${networkTypeName(tm.dataNetworkType)}")
             appendLine("Voice network: ${networkTypeName(tm.voiceNetworkType)}")
-            tm.signalStrength?.cellSignalStrengths?.forEachIndexed { i, c ->
-                appendLine(
-                    "Signal[$i]    : ${c.dbm} dBm, level ${c.level}/4 " +
-                        "(${c.javaClass.simpleName.removePrefix("CellSignalStrength")})"
-                )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                tm.signalStrength?.cellSignalStrengths?.forEachIndexed { i, c ->
+                    appendLine(
+                        "Signal[$i]    : ${c.dbm} dBm, level ${c.level}/4 " +
+                            "(${c.javaClass.simpleName.removePrefix("CellSignalStrength")})"
+                    )
+                }
+            } else {
+                signalDbm(tm.signalStrength)?.let { appendLine("Signal       : $it dBm") }
             }
         } catch (e: Exception) {
             appendLine("telephony: ${e.message}")
@@ -895,8 +921,12 @@ class MainActivity : AppCompatActivity() {
         fun sig(s: android.telephony.CellSignalStrength) = "${s.dbm} dBm (${s.level}/4)"
 
         val role = if (info.isRegistered) "serving cell" else "neighbour"
-        when (info) {
-            is android.telephony.CellInfoLte -> {
+        // Subject-less `when` so the CellInfoNr branch can carry an SDK guard.
+        // The class is API 29, and an `is` test against a class the platform
+        // does not have is itself the hazard — it resolves the type before any
+        // guard inside the branch could run.
+        when {
+            info is android.telephony.CellInfoLte -> {
                 val id = info.cellIdentity
                 row("Type", "LTE ($role)")
                 row("Cell ID", num(id.ci))
@@ -908,7 +938,8 @@ class MainActivity : AppCompatActivity() {
                     ?.let { row("Carrier", it) }
                 row("Signal", sig(info.cellSignalStrength))
             }
-            is android.telephony.CellInfoNr -> {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                info is android.telephony.CellInfoNr -> {
                 val id = info.cellIdentity as? android.telephony.CellIdentityNr
                 row("Type", "5G NR ($role)")
                 row("NCI", id?.nci?.toString() ?: "—")
@@ -918,7 +949,7 @@ class MainActivity : AppCompatActivity() {
                 row("MCC/MNC", "${id?.mccString ?: "—"}/${id?.mncString ?: "—"}")
                 row("Signal", sig(info.cellSignalStrength))
             }
-            is android.telephony.CellInfoWcdma -> {
+            info is android.telephony.CellInfoWcdma -> {
                 val id = info.cellIdentity
                 row("Type", "WCDMA ($role)")
                 row("Cell ID", num(id.cid))
@@ -928,7 +959,7 @@ class MainActivity : AppCompatActivity() {
                 row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
                 row("Signal", sig(info.cellSignalStrength))
             }
-            is android.telephony.CellInfoGsm -> {
+            info is android.telephony.CellInfoGsm -> {
                 val id = info.cellIdentity
                 row("Type", "GSM ($role)")
                 row("Cell ID", num(id.cid))
@@ -940,7 +971,12 @@ class MainActivity : AppCompatActivity() {
             }
             else -> {
                 row("Type", "${info.javaClass.simpleName.removePrefix("CellInfo")} ($role)")
-                row("Signal", sig(info.cellSignalStrength))
+                // The CellInfo base class only grew getCellSignalStrength() in
+                // API 30; every branch above reads it off its own subclass,
+                // which has had it since 17.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    row("Signal", sig(info.cellSignalStrength))
+                }
             }
         }
     }
@@ -952,6 +988,11 @@ class MainActivity : AppCompatActivity() {
      */
     private fun wifiSecurityName(info: android.net.wifi.WifiInfo?): String {
         if (info == null) return "—"
+        // getCurrentSecurityType() is API 31.  The catch below does not stand in
+        // for a version check: a missing method raises NoSuchMethodError, which
+        // is an Error rather than an Exception, so it would pass straight
+        // through and take the dialog down.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "—"
         return try {
             when (info.currentSecurityType) {
                 android.net.wifi.WifiInfo.SECURITY_TYPE_OPEN -> "open (none)"
@@ -1275,33 +1316,35 @@ class MainActivity : AppCompatActivity() {
         if (hasLocationPerm) {
             try {
                 val cellInfo = tm.allCellInfo?.firstOrNull()
-                when (cellInfo) {
-                    is CellInfoLte -> {
+                // Subject-less, so the API 29 CellInfoNr type test can be
+                // guarded — the guard has to sit outside the `is`, not inside
+                // the branch, or the class is resolved before it runs.
+                when {
+                    cellInfo is CellInfoLte -> {
                         tvCellId.text = cellInfo.cellIdentity.ci.let {
                             if (it == Int.MAX_VALUE) "N/A" else it.toString()
                         }
                         tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
                     }
-                    is CellInfoGsm -> {
+                    cellInfo is CellInfoGsm -> {
                         tvCellId.text = cellInfo.cellIdentity.cid.let {
                             if (it == Int.MAX_VALUE) "N/A" else it.toString()
                         }
                         tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
                     }
-                    is CellInfoWcdma -> {
+                    cellInfo is CellInfoWcdma -> {
                         tvCellId.text = cellInfo.cellIdentity.cid.let {
                             if (it == Int.MAX_VALUE) "N/A" else it.toString()
                         }
                         tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
                     }
-                    is CellInfoNr -> {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            val id = cellInfo.cellIdentity as? android.telephony.CellIdentityNr
-                            tvCellId.text = id?.nci?.let {
-                                if (it == Long.MAX_VALUE) "N/A" else it.toString()
-                            } ?: "N/A"
-                            tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
-                        }
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        cellInfo is CellInfoNr -> {
+                        val id = cellInfo.cellIdentity as? android.telephony.CellIdentityNr
+                        tvCellId.text = id?.nci?.let {
+                            if (it == Long.MAX_VALUE) "N/A" else it.toString()
+                        } ?: "N/A"
+                        tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
                     }
                     else -> {
                         tvCellId.text = "N/A"
