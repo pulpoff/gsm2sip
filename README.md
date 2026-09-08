@@ -181,8 +181,15 @@ keyed on it is what decides where the call goes.
 ## Asterisk Configuration (example)
 
 The gateway itself is server-agnostic — it registers like any SIP client. What
-follows is one worked example, using Asterisk to route inbound GSM calls to an
-AI agent. Adapt it to whatever your server does.
+follows is one worked example, using Asterisk (chan_sip) to route inbound GSM
+calls to an AI agent. Adapt it to whatever your server does.
+
+It addresses calls the way a VoIP router does: the Request-URI carries the
+SIM's number and `From` carries the calling party. That shapes the config
+below in two ways — the extension to match is the SIM's MSISDN in E.164, so
+the pattern has to accept the leading `+`, and the From user is no longer the
+account name, so the peer has to be recognised by the address it registered
+from rather than by who the INVITE says it is.
 
 ### 1. Create a SIP account for the gateway
 
@@ -190,8 +197,17 @@ Add to `sip.conf` or create via the realtime database:
 
 ```ini
 [gateway-gw1](agent-template)
+type = friend
+host = dynamic
 secret = <strong-password>
 context = gateway-incoming
+; From carries the GSM caller, not "gateway-gw1".  If chan_sip then logs "no
+; matching peer" for the caller's number, this makes it match on the address
+; the gateway registered from instead.
+insecure = port,invite
+; The gateway offers G.722 only unless Settings → Codec says otherwise.
+disallow = all
+allow = g722
 ```
 
 ### 2. Add gateway dialplan context
@@ -200,12 +216,15 @@ Add to `extensions.conf`:
 
 ```ini
 ; Gateway incoming calls (GSM → SIP → Agent)
+; EXTEN is the SIM's own number in international format, e.g. +4915112345678
+; — the leading "+" is why this is _+X. and not _X.
 [gateway-incoming]
-exten => _X.,1,NoOp(Gateway call from ${CALLERID(num)} via GSM SIM)
+exten => _+X.,1,NoOp(GSM call for ${EXTEN} from ${CALLERID(num)})
 same => n,Set(CDR(destination)=${EXTEN})
 same => n,Set(CDR(userfield)=gateway-gw1)
-; Route to AI agent (same logic as incoming-calls)
-same => n,Set(AgentToUse=${ODBC_AGENT_LOOKUP(gateway-gw1)})
+; Route on the number that was dialled, the way a DID is routed — one server,
+; several gateway SIMs, each landing on its own agent.
+same => n,Set(AgentToUse=${ODBC_AGENT_LOOKUP(${EXTEN})})
 same => n,GotoIf($["${AgentToUse}" = ""]?default_agent:route_to_agent)
 same => n(route_to_agent),MixMonitor(/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)}-${UNIQUEID}.wav)
 same => n,Dial(SIP/${AgentToUse},60,tT)
@@ -213,16 +232,16 @@ same => n,Hangup()
 same => n(default_agent),MixMonitor(/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)}-${UNIQUEID}.wav)
 same => n,Dial(SIP/100,60,tT)
 same => n,Hangup()
-
-; Outbound: Agent calls a number via the gateway
-; The agent context already allows outbound calls:
-;   Dial(SIP/gateway-gw1,,X-GSM-Forward: +1234567890)
-; Or use a custom AGI/ARI to set the header.
 ```
+
+`${CALLERID(num)}` is the GSM caller, passed through as the carrier delivered
+it — some carriers send `+49…`, some `0…`, and the gateway rewrites neither.
+Normalise it before any lookup that keys on the caller.
 
 ### 3. Making outbound calls through the gateway
 
-From Asterisk dialplan, to call a number via the gateway:
+The gateway dials whatever `X-GSM-Forward` names; the Request-URI of that
+INVITE is ignored. From the dialplan:
 
 ```ini
 exten => _X.,1,NoOp(Outbound via GSM gateway: ${EXTEN})
@@ -230,6 +249,12 @@ same => n,SIPAddHeader(X-GSM-Forward: +${EXTEN})
 same => n,Dial(SIP/gateway-gw1,60)
 same => n,Hangup()
 ```
+
+It answers `180 Ringing` as soon as it starts dialling and `200 OK` only when
+the GSM leg connects, so allow enough time in `Dial()` for GSM setup — 60s is
+comfortable, 20s is not. An INVITE that arrives without the header is answered
+on the spot and bridged to nothing, which is the usual sign that
+`SIPAddHeader()` ran on a different channel than the one that was dialled.
 
 ## SMS over SIP
 
@@ -342,6 +367,9 @@ sends them again, including after the next registration.
 
 ### Asterisk (chan_sip)
 
+Out-of-call MESSAGEs are off by default, and they arrive on the same peer the
+calls use — `[gateway-gw1]` from the call example above needs nothing added.
+
 ```ini
 ; sip.conf
 [general]
@@ -350,6 +378,11 @@ outofcall_message_context=messages
 auth_message_requests=yes
 ```
 
+#### Receiving: SMS and delivery reports
+
+Both arrive addressed to the SIM's own number, so one context handles them and
+`X-SMS-Event` is what separates a message from a report on something we sent.
+
 ```ini
 ; extensions.conf — exten is the Request-URI user, i.e. the SIM's number
 [messages]
@@ -357,17 +390,70 @@ exten => _+X.,1,NoOp(${MESSAGE(from)} -> ${MESSAGE(to)})
  same => n,Set(ID=${SIP_HEADER(X-SMS-Id)})
  same => n,Set(EVENT=${SIP_HEADER(X-SMS-Event)})
  same => n,GotoIf($["${EVENT}" != ""]?report)
- same => n,AGI(sms_in.agi,${ID},${CALLERID(num)},${MESSAGE(body)})
+
+; A received SMS.  CALLERID(num) is the sender, MESSAGE(body) the reassembled
+; text; X-SMS-Sim-Slot says which SIM took it, which is the slot a reply has
+; to leave by.
+ same => n,Set(SLOT=${SIP_HEADER(X-SMS-Sim-Slot)})
+ same => n,AGI(sms_in.agi,${ID},${CALLERID(num)},${MESSAGE(to)},${SLOT},${MESSAGE(body)})
  same => n,Hangup()
- same => n(report),AGI(sms_status.agi,${ID},${EVENT},${SIP_HEADER(X-SMS-Status)},${SIP_HEADER(X-SMS-Reason)})
+
+; A report on something we asked the gateway to send.  ID is the same id the
+; send carried, so it matches the report back to the message.
+ same => n(report),Set(STATUS=${SIP_HEADER(X-SMS-Status)})
+ same => n,Set(REASON=${SIP_HEADER(X-SMS-Reason)})
+ same => n,AGI(sms_status.agi,${ID},${EVENT},${STATUS},${REASON})
  same => n,Hangup()
 ```
 
-Two chan_sip specifics worth knowing. It emits the `202` itself, before the
-dialplan runs, so a dialplan failure will not make the gateway retry — write
-durably early and dedupe on `X-SMS-Id`. And an unmatched extension returns
-`404`, which the gateway reads as not-accepted and retries, so make sure the
-pattern covers the SIM's number format.
+`submitted` is not the end of the story — a `delivered` or `undelivered`
+follows it — so a handler that closes the message out on the first report
+closes it too early. `failed` and `delivered`/`undelivered` are terminal.
+
+#### Sending
+
+`MessageSend()` addresses the peer, so the Request-URI it builds carries the
+account name, not the recipient. The gateway reads `X-SMS-To` first and falls
+back to the Request-URI, so the recipient goes in that header:
+
+```ini
+; extensions.conf — Gosub(sms-out,s,1(+4917098765432,Reply from the agent))
+[sms-out]
+exten => s,1,NoOp(SMS to ${ARG1})
+ same => n,Set(MESSAGE(body)=${ARG2})
+ same => n,Set(MESSAGE(custom_data)=mark_all_outbound)
+ same => n,Set(MESSAGE_DATA(X-SMS-To)=${ARG1})
+; Our own id, so the delivery reports can be matched back to this send.  Omit
+; it and the gateway mints one, which arrives only in the reports.
+ same => n,Set(MESSAGE_DATA(X-SMS-Id)=${UNIQUEID})
+; Only needed on a dual-SIM gateway — the slot the conversation is on.
+ same => n,Set(MESSAGE_DATA(X-SMS-Sim-Slot)=1)
+; Second argument is who it is from, as the server sees it — the gateway does
+; not read it, but it is what lands in the CDR.
+ same => n,MessageSend(sip:gateway-gw1,sip:agent@example.com)
+ same => n,NoOp(send status: ${MESSAGE_SEND_STATUS})
+ same => n,Return()
+```
+
+`MESSAGE_SEND_STATUS` is `SUCCESS` for the `202`, which means the gateway has
+the message on disk and owns delivering it — not that it reached anyone. What
+it cost comes back as `X-SMS-Parts` and `X-SMS-Encoding` on that `202`, and
+Asterisk does not expose response headers to the dialplan, so a sender that
+cares about part count has to measure the text itself: one character outside
+GSM-7 takes the whole message to UCS-2 and 70 characters a part.
+
+Nothing above is dialplan-only — AMI's `MessageSend` action and ARI's
+`POST /endpoints/sendMessage` take the same body and variables.
+
+#### chan_sip specifics worth knowing
+
+It emits the `202` for a received message itself, before the dialplan runs, so
+a dialplan failure will not make the gateway retry — write durably early and
+dedupe on `X-SMS-Id`. An unmatched extension returns `404`, which the gateway
+reads as not-accepted and retries every 30s, so make sure the pattern covers
+the SIM's number format. And if your build does not carry `MESSAGE_DATA()`
+headers outbound, sends still work: the gateway mints its own id and uses the
+default SIM, and only `X-SMS-To` is genuinely required.
 
 Carriers also rate-limit SMS independently of anything here: a run of sends can
 end in `modem_err/facility_rejected` for every destination, including the SIM's
