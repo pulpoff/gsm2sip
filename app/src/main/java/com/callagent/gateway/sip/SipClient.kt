@@ -457,13 +457,24 @@ class SipClient(
             var delay = 500L
             val maxDelay = 4000L
             val maxRetransmits = 7
+            var elapsed = 0L
+            var unanswered = false
             for (i in 1..maxRetransmits) {
                 Thread.sleep(delay)
+                elapsed += delay
                 if (call.responseReceived) break
                 if (!activeCalls.containsKey(callId)) break
                 Log.i(TAG, "INVITE retransmit #$i for $callId (${delay}ms)")
+                // One line, not seven: silence from the server is the fact
+                // worth recording, and without it an unanswered INVITE showed
+                // up in the app only as a call that never got picked up.
+                if (i == 1) uiLog("No response to INVITE — retransmitting")
                 sendTo(invite, serverAddress)
+                unanswered = true
                 delay = minOf(delay * 2, maxDelay)
+            }
+            if (unanswered && !call.responseReceived && activeCalls.containsKey(callId)) {
+                uiLog("Server never answered the INVITE (${elapsed / 1000}s, $maxRetransmits sends)")
             }
         }, "INVITE-Retransmit").start()
 

@@ -263,6 +263,34 @@ class GatewayService : Service() {
         Log.i(TAG, "GatewayService created")
     }
 
+    /**
+     * Report whether the gateway still holds the default-dialer role.
+     *
+     * Losing it is silent and total: Telecom stops binding GsmCallService, so
+     * no incoming GSM call is ever seen, while SIP stays registered and the
+     * app looks perfectly healthy.  Checked at every bring-up so the log
+     * carries the answer without anyone having to go looking for it.
+     */
+    private fun checkDefaultDialer(): Boolean {
+        return try {
+            val tm = getSystemService(Context.TELECOM_SERVICE) as android.telecom.TelecomManager
+            val holder = tm.defaultDialerPackage
+            val held = holder == packageName
+            if (held) {
+                broadcastLog("Default dialer: yes")
+            } else {
+                broadcastLog(
+                    "WARNING: not the default dialer (${holder ?: "none"}) — " +
+                        "incoming GSM calls will not reach the gateway"
+                )
+            }
+            held
+        } catch (e: Exception) {
+            broadcastLog("Default dialer check failed: ${e.message}")
+            false
+        }
+    }
+
     /** Release the init flag if it has been held implausibly long. */
     private fun clearStaleInitializing() {
         if (initializing.get() &&
@@ -522,6 +550,8 @@ class GatewayService : Service() {
             orchestrator = null
             sipClient = null
         }
+
+        checkDefaultDialer()
 
         val localIp = getLocalIp()
         currentLocalIp = localIp
@@ -797,6 +827,10 @@ class GatewayService : Service() {
             // read as offline while the registration was perfectly alive.
             putExtra("registered", sipClient?.registered == true)
             putExtra("online_since", onlineSince)
+            // When the bridge came up, so the UI can show elapsed time rather
+            // than time-since-it-noticed.  It only learns of a call when a
+            // state change is broadcast, which is not when the call started.
+            putExtra("call_start", currentCallStart)
             putExtra("in_calls", incomingCalls)
             putExtra("in_duration", incomingDurationSec)
             putExtra("out_calls", outgoingCalls)

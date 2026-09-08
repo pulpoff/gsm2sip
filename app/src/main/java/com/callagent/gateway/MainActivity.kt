@@ -155,19 +155,50 @@ class MainActivity : AppCompatActivity() {
     private var inCallOpenTime = 0L
     private var viewBeforeInCall = "dialer"
     private var callStartTime = 0L
+    /** When the service says the bridge came up.  Authoritative: the activity
+     *  can be started, stopped and restarted several times during one call. */
+    private var serviceCallStart = 0L
     private var lastGsmPollState = -1
     private val callTimerHandler = Handler(Looper.getMainLooper())
     private val callTimerRunnable = object : Runnable {
         override fun run() {
             if (callStartTime > 0) {
-                val elapsed = (System.currentTimeMillis() - callStartTime) / 1000
-                val t = String.format("%02d:%02d", elapsed / 60, elapsed % 60)
+                val elapsedMs = System.currentTimeMillis() - callStartTime
+                val elapsed = elapsedMs / 1000
+                val t = if (elapsed >= 3600) {
+                    String.format(
+                        "%d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60
+                    )
+                } else {
+                    String.format("%02d:%02d", elapsed / 60, elapsed % 60)
+                }
                 tvInCallTimer.text = t
                 if (::tvHomeCallTimer.isInitialized) tvHomeCallTimer.text = t
-                callTimerHandler.postDelayed(this, 1000)
+                // Tick on the second boundary of the call, not 1000ms after
+                // whenever this happened to run: a flat delay accumulates the
+                // handler's own latency, so the display drifts off the real
+                // elapsed time and eventually skips or repeats a second.
+                callTimerHandler.postDelayed(this, 1000 - (elapsedMs % 1000))
             }
         }
     }
+    /**
+     * Arm the call timer against the service's start time.
+     *
+     * Two things were wrong with starting it from the UI's own clock.  The
+     * activity only hears about a call when a state change is broadcast, so
+     * reopening the app mid-call restarted the count at 00:00; and the ticker
+     * is cancelled in onPause but was only ever re-armed when callStartTime
+     * was still zero, so coming back to a live call showed a frozen number.
+     * Re-arming unconditionally is safe — the pending callback is removed
+     * first — and the elapsed time is now real in both cases.
+     */
+    private fun startCallTimer() {
+        callStartTime = if (serviceCallStart > 0) serviceCallStart else System.currentTimeMillis()
+        callTimerHandler.removeCallbacks(callTimerRunnable)
+        callTimerRunnable.run()
+    }
+
     private val gsmPollRunnable = object : Runnable {
         override fun run() {
             if (!inCallOpen) return
@@ -235,6 +266,7 @@ class MainActivity : AppCompatActivity() {
                     val state = intent.getStringExtra("state") ?: return
                     val info = intent.getStringExtra("info") ?: ""
                     sipRegistered = intent.getBooleanExtra("registered", sipRegistered)
+                    serviceCallStart = intent.getLongExtra("call_start", 0L)
                     updateStatus(state, info)
 
                     val newOnlineSince = intent.getLongExtra("online_since", 0L)
@@ -272,12 +304,8 @@ class MainActivity : AppCompatActivity() {
                             "SIP_RINGING" -> tvInCallStatus.text = "Ringing..."
                             "BRIDGED" -> {
                                 tvInCallStatus.text = "Connected"
-                                if (callStartTime == 0L) {
-                                    callStartTime = System.currentTimeMillis()
-                                    tvInCallTimer.text = "00:00"
-                                    tvInCallTimer.visibility = View.VISIBLE
-                                    callTimerRunnable.run()
-                                }
+                                tvInCallTimer.visibility = View.VISIBLE
+                                startCallTimer()
                             }
                             "TEARING_DOWN" -> tvInCallStatus.text = "Ending..."
                             "IDLE" -> {
@@ -586,11 +614,7 @@ class MainActivity : AppCompatActivity() {
             tvHomeCallDirection.text =
                 if (com.callagent.gateway.gsm.GsmCallManager.activeCallState ==
                     android.telecom.Call.STATE_ACTIVE && gsmCallActive) "GSM → SIP" else "GSM → SIP"
-            if (callStartTime == 0L) {
-                callStartTime = System.currentTimeMillis()
-                callTimerHandler.removeCallbacks(callTimerRunnable)
-                callTimerRunnable.run()
-            }
+            startCallTimer()
         } else {
             homeCallCard.visibility = View.GONE
             if (!inCallOpen) {
@@ -1051,6 +1075,7 @@ class MainActivity : AppCompatActivity() {
                 System.currentTimeMillis() - inCallOpenTime > 2000) {
                 closeInCallScreen()
             } else {
+                callTimerHandler.removeCallbacks(callTimerRunnable)
                 if (callStartTime > 0) callTimerRunnable.run()
                 callTimerHandler.removeCallbacks(gsmPollRunnable)
                 callTimerHandler.postDelayed(gsmPollRunnable, 500)
