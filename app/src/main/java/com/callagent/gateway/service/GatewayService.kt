@@ -995,6 +995,10 @@ class GatewayService : Service() {
         // as it appended, so every line buffered while the app was closed —
         // the whole unattended history, which is the part worth reading —
         // collapsed onto the moment the app was opened.
+        // Mirrored to logcat as well: everything the Logs screen shows is then
+        // greppable over adb, which is how these get read when something has
+        // already gone wrong and the app is not in front of anyone.
+        Log.i(TAG, "LOG: $msg")
         val stamped = "${bufferTimeFormat.format(java.util.Date())}  $msg"
         synchronized(logBuffer) {
             logBuffer.add(stamped)
@@ -1150,6 +1154,17 @@ class GatewayService : Service() {
         val logBuffer = mutableListOf<String>()
 
         /** Drain buffered logs.  Returns all messages and clears the buffer. */
+        /**
+         * Everything buffered, without consuming it.
+         *
+         * The old drain cleared as it read, so a second reader — an activity
+         * recreated mid-session, say — got nothing, and the Logs screen came
+         * up blank precisely when there was something to look at.
+         */
+        fun logSnapshot(): List<String> = synchronized(logBuffer) { logBuffer.toList() }
+
+        fun clearLogBuffer() = synchronized(logBuffer) { logBuffer.clear() }
+
         fun drainLogBuffer(): List<String> = synchronized(logBuffer) {
             val copy = logBuffer.toList()
             logBuffer.clear()

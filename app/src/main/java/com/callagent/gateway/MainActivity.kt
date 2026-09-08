@@ -1081,11 +1081,14 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
 
         // Replay any log messages buffered while activity was paused
-        // Already stamped by the service, with the time the event actually
-        // happened — append verbatim rather than re-dating it to now.
-        val buffered = GatewayService.drainLogBuffer()
-        for (line in buffered) {
-            appendLogRaw(line)
+        // Re-render from the service's buffer rather than consuming it: the
+        // lines are already stamped with when each event happened, and
+        // replacing the view means a recreated activity shows the full recent
+        // history instead of whatever it happened to witness.
+        val buffered = GatewayService.logSnapshot()
+        if (buffered.isNotEmpty()) {
+            tvLog.text = buffered.joinToString("\n", postfix = "\n")
+            svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
         }
 
         if (onlineSince > 0) {
@@ -2087,7 +2090,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun clearLog() {
         tvLog.text = ""
-        GatewayService.drainLogBuffer()
+        GatewayService.clearLogBuffer()
         Toast.makeText(this, "Log cleared", Toast.LENGTH_SHORT).show()
     }
 
