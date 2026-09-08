@@ -5,6 +5,21 @@
 
 SKIPUNZIP=1
 
+# Legacy-module control variables.  Magisk's install_module() reads these after
+# sourcing this script and gives them no defaults of its own, so leaving one
+# unset is not the same as false: `$SKIPMOUNT && touch $MODPATH/skip_mount`
+# expands to an empty command, which exits 0, and the touch then runs.  An
+# unset SKIPMOUNT therefore silently produces a skip_mount file and Magisk
+# mounts nothing — no priv-app APK, no /system/bin overlay.
+#
+# The other three are copy-backs from the installer's temp dir.  Everything
+# this module ships is already unzipped into $MODPATH below, so they stay
+# false and the files we extract ourselves are the ones that count.
+SKIPMOUNT=false
+PROPFILE=false
+POSTFSDATA=false
+LATESTARTSERVICE=false
+
 # Show version
 MOD_VER=$(grep '^version=' "$MODPATH/../module.prop" 2>/dev/null | cut -d= -f2)
 [ -z "$MOD_VER" ] && MOD_VER=$(unzip -p "$ZIPFILE" module.prop 2>/dev/null | grep '^version=' | cut -d= -f2)
@@ -38,6 +53,36 @@ else
         ui_print "! Install the APK first (adb install gateway.apk),"
         ui_print "! then reinstall this Magisk module."
     fi
+fi
+
+# ── Install the tinymix build that matches this device ─
+# tinymix ships as two static builds.  The ALSA control ioctls encode the size
+# of structs that contain `long`, so an ARM64 binary and an armeabi-v7a one
+# speak different ioctl ABIs, and only the matching one works.
+#
+# Getting this wrong is quiet, not loud.  The module used to overlay an ARM64
+# tinymix unconditionally, which on the 32-bit Galaxy S4 Mini shadowed the
+# ROM's own working copy with a binary the linker refuses to load —
+# "not executable: 64-bit ELF file" — while the app, which only tested the
+# executable bit, went on believing it had tinymix and failed every mixer
+# command in silence.
+DEVICE_ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
+case "$DEVICE_ABI" in
+    arm64*|aarch64*) TINYMIX_SRC="$MODPATH/tinymix" ;;
+    arm*)            TINYMIX_SRC="$MODPATH/tinymix32" ;;
+    *)               TINYMIX_SRC="" ;;
+esac
+
+rm -f "$MODPATH/system/bin/tinymix"
+if [ -n "$TINYMIX_SRC" ] && [ -f "$TINYMIX_SRC" ]; then
+    mkdir -p "$MODPATH/system/bin"
+    cp "$TINYMIX_SRC" "$MODPATH/system/bin/tinymix"
+    ui_print "- tinymix: installed the $DEVICE_ABI build"
+else
+    # Nothing to offer — leave /system/bin alone so that if the ROM ships its
+    # own tinymix it stays reachable.
+    rmdir "$MODPATH/system/bin" 2>/dev/null
+    ui_print "! tinymix: no build for $DEVICE_ABI, leaving the ROM's in place"
 fi
 
 # ── Hide PermissionController ─────────────────────────
@@ -78,6 +123,9 @@ fi
 # tinymix/tinycap need execute permission
 if [ -f "$MODPATH/tinymix" ]; then
     chmod 755 "$MODPATH/tinymix"
+fi
+if [ -f "$MODPATH/tinymix32" ]; then
+    chmod 755 "$MODPATH/tinymix32"
 fi
 if [ -f "$MODPATH/tinycap" ]; then
     chmod 755 "$MODPATH/tinycap"

@@ -172,20 +172,22 @@ appops set "$PKG" RECORD_AUDIO allow 2>/dev/null && \
 # /system/bin/tinymix via Magisk overlay can hit SELinux "Permission denied"
 # on some devices, so we install to /data/local/tmp/ which has a permissive
 # context.  The app prefers /data/local/tmp/ in its discovery order.
-# The bundled binary is ARM64 only — skip on 32-bit devices (e.g. S4 Mini).
+# tinymix is bundled once per ABI: the ALSA control ioctls encode the size of
+# structs holding `long`, so an ARM64 build and an armeabi-v7a build speak
+# different ioctl ABIs and neither works on the other's kernel.
 DEVICE_ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
-if [ -f "$MODDIR/tinymix" ]; then
-    case "$DEVICE_ABI" in
-        arm64*|aarch64*)
-            cp "$MODDIR/tinymix" /data/local/tmp/tinymix
-            chmod 755 /data/local/tmp/tinymix
-            chown root:root /data/local/tmp/tinymix
-            log -t "$TAG" "tinymix: installed ARM64 binary to /data/local/tmp/tinymix"
-            ;;
-        *)
-            log -t "$TAG" "tinymix: skipped (device ABI=$DEVICE_ABI, bundled binary is ARM64)"
-            ;;
-    esac
+case "$DEVICE_ABI" in
+    arm64*|aarch64*) TINYMIX_SRC="$MODDIR/tinymix" ;;
+    arm*)            TINYMIX_SRC="$MODDIR/tinymix32" ;;
+    *)               TINYMIX_SRC="" ;;
+esac
+if [ -n "$TINYMIX_SRC" ] && [ -f "$TINYMIX_SRC" ]; then
+    cp "$TINYMIX_SRC" /data/local/tmp/tinymix
+    chmod 755 /data/local/tmp/tinymix
+    chown root:root /data/local/tmp/tinymix
+    log -t "$TAG" "tinymix: installed $DEVICE_ABI binary to /data/local/tmp/tinymix"
+else
+    log -t "$TAG" "tinymix: no bundled build for ABI=$DEVICE_ABI"
 fi
 TINYMIX_FOUND=false
 for TPATH in /data/local/tmp/tinymix /vendor/bin/tinymix /system/bin/tinymix /system/xbin/tinymix; do
@@ -202,18 +204,22 @@ fi
 # ── Ensure tinycap is available ───────────────────────
 # tinycap is needed to probe ALSA capture PCMs for modem downlink audio.
 # Same deployment strategy as tinymix: /data/local/tmp/ for SELinux compat.
-if [ -f "$MODDIR/tinycap" ]; then
-    case "$DEVICE_ABI" in
-        arm64*|aarch64*)
-            cp "$MODDIR/tinycap" /data/local/tmp/tinycap
-            chmod 755 /data/local/tmp/tinycap
-            chown root:root /data/local/tmp/tinycap
-            log -t "$TAG" "tinycap: installed ARM64 binary to /data/local/tmp/tinycap"
-            ;;
-        *)
-            log -t "$TAG" "tinycap: skipped (device ABI=$DEVICE_ABI, bundled binary is ARM64)"
-            ;;
-    esac
+# The bundled tinycap is an ARM64 C build with no source in this tree, so on a
+# 32-bit device fall back to the ROM's own — LineageOS ships tinyplay/tinycap/
+# tinypcminfo on the msm8960 devices, and the app only ever looks for tinycap
+# at the /data/local/tmp path.
+TINYCAP_SRC=""
+case "$DEVICE_ABI" in
+    arm64*|aarch64*) [ -f "$MODDIR/tinycap" ] && TINYCAP_SRC="$MODDIR/tinycap" ;;
+    *)               [ -x /system/bin/tinycap ] && TINYCAP_SRC=/system/bin/tinycap ;;
+esac
+if [ -n "$TINYCAP_SRC" ]; then
+    cp "$TINYCAP_SRC" /data/local/tmp/tinycap
+    chmod 755 /data/local/tmp/tinycap
+    chown root:root /data/local/tmp/tinycap
+    log -t "$TAG" "tinycap: installed $TINYCAP_SRC to /data/local/tmp/tinycap"
+else
+    log -t "$TAG" "tinycap: none available for ABI=$DEVICE_ABI — PCM probe will be skipped"
 fi
 
 # ── Log ALSA card info for diagnostics ────────────────
