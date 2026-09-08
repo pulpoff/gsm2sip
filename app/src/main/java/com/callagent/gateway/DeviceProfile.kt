@@ -2,6 +2,7 @@ package com.callagent.gateway
 
 import android.media.AudioAttributes
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 
 /**
@@ -241,7 +242,43 @@ data class DeviceProfile(
          *
          * Falls back to `which tinymix` in the root shell PATH.
          */
-        val tinymixBin: String by lazy { discoverTinymix() }
+        @Volatile private var cachedTinymix: String = ""
+        @Volatile private var lastProbeMs: Long = 0L
+        @Volatile private var missingReported = false
+
+        /** Minimum gap between discovery attempts once one has come back empty. */
+        private const val TINYMIX_REPROBE_MS = 5_000L
+
+        /**
+         * Resolved path to the tinymix binary, re-probed until one is found.
+         *
+         * Only a *successful* discovery is cached.  Discovery runs through the
+         * root shell, so a shell that was denied — or had just died and not yet
+         * been replaced — makes a perfectly good binary look absent.  This was
+         * a `by lazy`, which cached that empty answer for the life of the
+         * process: a single transient root failure disabled every mixer control
+         * until the app was force-stopped, and the gateway went on answering
+         * calls it could no longer bridge, silently.
+         *
+         * Re-probing is rate-limited to [TINYMIX_REPROBE_MS] so a genuinely
+         * rootless device does not run four tinymix invocations per frame.
+         */
+        val tinymixBin: String
+            get() {
+                cachedTinymix.let { if (it.isNotEmpty()) return it }
+                synchronized(this) {
+                    cachedTinymix.let { if (it.isNotEmpty()) return it }
+                    val now = SystemClock.elapsedRealtime()
+                    if (lastProbeMs != 0L && now - lastProbeMs < TINYMIX_REPROBE_MS) return ""
+                    lastProbeMs = now
+                    val found = discoverTinymix()
+                    if (found.isNotEmpty()) {
+                        cachedTinymix = found
+                        missingReported = false
+                    }
+                    return found
+                }
+            }
 
         private fun discoverTinymix(): String {
             val paths = listOf(
@@ -283,9 +320,16 @@ data class DeviceProfile(
                 Log.w(TAG, "tinymix discovery error: ${e.message}")
             }
 
-            Log.e(TAG, "no runnable tinymix on device! ABOX/ALSA mixer controls will not work. " +
-                "Push a static tinymix for ${Build.SUPPORTED_ABIS.firstOrNull()} to " +
-                "/data/local/tmp/tinymix (chmod 755)")
+            // Report the transition, not every probe: discovery now retries
+            // for as long as it keeps failing, and logging on each attempt
+            // would bury the call it is breaking.
+            if (!missingReported) {
+                missingReported = true
+                Log.e(TAG, "no runnable tinymix on device! ABOX/ALSA mixer controls will not work. " +
+                    "root=${RootShell.rootState()}. " +
+                    "Push a static tinymix for ${Build.SUPPORTED_ABIS.firstOrNull()} to " +
+                    "/data/local/tmp/tinymix (chmod 755)")
+            }
             return ""
         }
 

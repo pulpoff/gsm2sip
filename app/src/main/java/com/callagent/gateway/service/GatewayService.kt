@@ -1140,6 +1140,7 @@ class GatewayService : Service() {
         sip.logListener = { msg -> broadcastLog("SIP: $msg") }
         sip.onSmsRequest = { m -> onSmsSendRequest(m) }
         GsmCallManager.logCallback = { msg -> broadcastLog("AUDIO: $msg") }
+        RootShell.statusCallback = { msg -> broadcastLog("ROOT: $msg") }
         sip.onConnectionLost = { reconnect() }
 
         // Last check before anything binds a socket: if a newer bring-up has
