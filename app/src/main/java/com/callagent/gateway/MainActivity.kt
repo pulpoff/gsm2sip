@@ -327,6 +327,7 @@ class MainActivity : AppCompatActivity() {
         tabConfig = findViewById(R.id.tabConfig)
         findViewById<View>(R.id.btnConfigBack).setOnClickListener { switchTab("home") }
         findViewById<View>(R.id.btnCfgSave).setOnClickListener { saveConfigFromView() }
+        findViewById<View>(R.id.btnCfgClearRecents).setOnClickListener { confirmClearRecents() }
         tvHomeStatusPill = findViewById(R.id.tvHomeStatusPill)
         tvNetMobile = findViewById(R.id.tvNetMobile)
         tvNetWifi = findViewById(R.id.tvNetWifi)
@@ -580,6 +581,37 @@ class MainActivity : AppCompatActivity() {
         })
 
         switchTab("config")
+    }
+
+    /**
+     * Empty the traffic list — calls and messages together, since both are
+     * rows in the same log.
+     *
+     * Confirmed first: it is not recoverable, and the log is the only record
+     * the gateway keeps of what it has handled.
+     */
+    private fun confirmClearRecents() {
+        val count = try { CallLogStore.getEntries(this).size } catch (_: Exception) { 0 }
+        if (count == 0) {
+            Toast.makeText(this, "Nothing to clear", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Clear recents?")
+            .setMessage("Removes all $count calls and messages from the list. This cannot be undone.")
+            .setPositiveButton("Clear") { _, _ ->
+                // Off the UI thread: clearing rewrites the stored blob, and
+                // the list is rebuilt from disk straight afterwards.
+                Thread {
+                    try { CallLogStore.clear(this) } catch (_: Exception) {}
+                    runOnUiThread {
+                        if (currentTab == "home") refreshHome()
+                        Toast.makeText(this, "Recents cleared", Toast.LENGTH_SHORT).show()
+                    }
+                }.start()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun saveConfigFromView() {

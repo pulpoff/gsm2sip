@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An invisible notification icon.
+     Android will not let a foreground service go without a notification, and
+     it forces that notification's importance up to at least LOW whatever the
+     channel says — which still draws a glyph in the status bar.  The icon is
+     the one part the platform does not override, so "no status bar icon" is
+     done by giving it nothing visible to draw.
+
+     The path is deliberately present and fully transparent rather than the
+     vector being empty: a vector with no paths at all cannot be rasterised,
+     and posting it throws BadForegroundServiceNotificationException
+     ("Couldn't create icon") which kills the process. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,0h24v24h-24z" />
+</vector>

@@ -617,6 +617,24 @@
                             android:paddingTop="6dp" />
 
                         <Button
+                            android:id="@+id/btnCfgClearRecents"
+                            android:layout_width="wrap_content"
+                            android:layout_gravity="center_horizontal"
+                            android:layout_height="40dp"
+                            android:text="CLEAR RECENTS"
+                            android:textSize="12sp"
+                            android:paddingStart="20dp"
+                            android:paddingEnd="20dp"
+                            android:textColor="#F87171"
+                            android:backgroundTint="#374151"
+                            android:layout_marginTop="24dp"
+                            android:layout_marginBottom="20dp"
+                            android:minHeight="0dp"
+                            android:minWidth="0dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp" />
+
+                        <Button
                             android:id="@+id/btnCfgSave"
                             android:layout_width="match_parent"
                             android:layout_height="52dp"
@@ -624,7 +642,7 @@
                             android:textStyle="bold"
                             android:textColor="@color/accent_on"
                             android:backgroundTint="@color/accent"
-                            android:layout_marginTop="20dp"
+                            android:layout_marginTop="0dp"
                             android:minHeight="0dp"
                             android:insetTop="0dp"
                             android:insetBottom="0dp" />

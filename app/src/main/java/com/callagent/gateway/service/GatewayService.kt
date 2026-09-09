@@ -1362,22 +1362,17 @@ class GatewayService : Service() {
     }
 
     /**
-     * Make the status bar preference real on releases that ignore the channel.
+     * Undo the notification suspension an earlier build applied.
      *
-     * A minimum-importance channel is enough on Android 16, but Android 12 and
-     * earlier force a foreground service's notification to stay visible
-     * whatever the channel says -- neither IMPORTANCE_MIN nor the
-     * POST_NOTIFICATION appop removes the icon, both were measured.
-     * Suspending the package's notifications does remove it, and the service
-     * keeps running: verified still registered and bridging afterwards.
-     *
-     * Not persisted by the platform, so it is re-applied on every start.
+     * Suspending the package's notifications did hide the icon, but it is a
+     * blunt instrument -- it swallows everything the app might ever post, not
+     * just this one -- and it turned out to be unnecessary: an empty small
+     * icon hides the glyph on its own, on Android 9 and 16 alike.  Devices
+     * that ran the older build are still suspended, and that state survives
+     * app updates, so clear it unconditionally.
      */
     private fun applyNotificationVisibility() {
-        val show = getSharedPreferences("gateway", MODE_PRIVATE)
-            .getBoolean("show_notification", true)
-        val verb = if (show) "unsuspend_package" else "suspend_package"
-        RootShell.exec("cmd notification $verb $packageName 2>/dev/null", 5000)
+        RootShell.exec("cmd notification unsuspend_package $packageName 2>/dev/null", 5000)
     }
 
     /**
@@ -1424,10 +1419,13 @@ class GatewayService : Service() {
         runCatching { getSystemService(NotificationManager::class.java)?.cancel(stale) }
     }
 
+    /** Whether the user wants the gateway visible in the status bar. */
+    private fun showStatusBarIcon(): Boolean =
+        getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("show_notification", true)
+
     /** Which channel the foreground notification should post to right now. */
     private fun activeChannelId(): String =
-        if (getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("show_notification", true))
-            CHANNEL_ID else CHANNEL_ID_QUIET
+        if (showStatusBarIcon()) CHANNEL_ID else CHANNEL_ID_QUIET
 
     private enum class NotifState { OK, WARN, ERROR }
 
@@ -1443,7 +1441,14 @@ class GatewayService : Service() {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val icon = when (state) {
+        // An empty icon when the status bar is turned off.  The quiet channel
+        // is not enough on its own: Android forces a foreground service's
+        // notification up to at least LOW importance whatever the channel
+        // says, and LOW still draws a glyph.  The icon is the part it does
+        // not override, so the setting is honoured by drawing nothing.  The
+        // notification itself stays, because the platform requires it, and
+        // still carries the status text in the shade.
+        val icon = if (!showStatusBarIcon()) R.drawable.ic_notif_blank else when (state) {
             NotifState.OK -> R.drawable.ic_notif_check
             NotifState.WARN -> R.drawable.ic_notif_warning
             NotifState.ERROR -> R.drawable.ic_notif_cross
