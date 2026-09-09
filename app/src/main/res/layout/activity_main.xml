@@ -56,35 +56,32 @@
                         android:paddingVertical="5dp"
                         android:layout_marginStart="10dp" />
 
+                    <!-- Height is pinned to the status pill's rather than wrapped:
+                         with no text these still reserve a default line box,
+                         which made them taller than the pill beside them. -->
                     <TextView
                         android:id="@+id/tvHomeTlsBadge"
                         android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="TLS"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:textColor="@color/tls_badge"
+                        android:layout_height="33dp"
+                        android:gravity="center"
+                        android:contentDescription="SIP signalling encrypted with TLS"
                         android:background="@drawable/input_bg"
                         android:drawableStart="@drawable/ic_shield_lock"
-                        android:drawablePadding="4dp"
-                        android:paddingHorizontal="10dp"
-                        android:paddingVertical="5dp"
+                        android:paddingHorizontal="9dp"
+                        android:paddingVertical="0dp"
                         android:layout_marginStart="6dp"
                         android:visibility="gone" />
 
                     <TextView
                         android:id="@+id/tvHomeSrtpBadge"
                         android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="SRTP"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:textColor="@color/srtp_badge"
+                        android:layout_height="33dp"
+                        android:gravity="center"
+                        android:contentDescription="Call audio encrypted with SRTP"
                         android:background="@drawable/input_bg"
                         android:drawableStart="@drawable/ic_fa_key"
-                        android:drawablePadding="4dp"
-                        android:paddingHorizontal="10dp"
-                        android:paddingVertical="5dp"
+                        android:paddingHorizontal="9dp"
+                        android:paddingVertical="0dp"
                         android:layout_marginStart="6dp"
                         android:visibility="gone" />
 
