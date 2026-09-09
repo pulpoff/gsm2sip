@@ -5,7 +5,7 @@
 <h1 align="center">gsm2sip</h1>
 
 <p align="center">
-Bridges GSM calls on  Android phone to any SIP server.
+Bridges Android phone to any SIP server as GSM Gateway
 </p>
 
 | Calls and messages | Link detail |
