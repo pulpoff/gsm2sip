@@ -598,24 +598,6 @@
                             android:textColor="@color/text_hint"
                             android:paddingTop="6dp" />
 
-                        <CheckBox
-                            android:id="@+id/cbCfgNotification"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="Status bar notification"
-                            android:buttonTint="@color/accent"
-                            android:textColor="@color/text_label"
-                            android:checked="true"
-                            android:layout_marginTop="8dp" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="Shows the gateway icon in the status bar. Android always keeps one notification for a background service, so it cannot be removed entirely."
-                            android:textSize="12sp"
-                            android:textColor="@color/text_hint"
-                            android:paddingTop="6dp" />
-
                         <Button
                             android:id="@+id/btnCfgClearRecents"
                             android:layout_width="wrap_content"

@@ -1,6 +1,6 @@
 id=sip-gsm-gateway
 name=SIP-GSM Gateway Permissions
-version=v1.0.3
-versionCode=370
+version=v1.1.0
+versionCode=371
 author=callagent
 description=Priv-app permissions (CAPTURE_AUDIO_OUTPUT, MODIFY_PHONE_STATE), auto-grant runtime permissions, audio config for SIP-GSM gateway

@@ -1328,48 +1328,41 @@ class GatewayService : Service() {
     // ── Notification ────────────────────────────────────
 
     /**
-     * Two channels, differing only in importance.
+     * One channel, at minimum importance.
      *
-     * A foreground service must keep a notification -- Android will not let it
-     * run without one -- so "off" cannot mean "gone".  What it can mean is
-     * IMPORTANCE_MIN, which keeps the icon out of the status bar and drops the
-     * entry to the bottom of the shade.  A channel's importance belongs to the
-     * user once created and cannot be lowered programmatically, so the setting
-     * switches channels rather than editing one.
+     * A foreground service must keep a notification and Android will not let
+     * that go, so the gateway always has one entry in the shade -- that part
+     * is the platform's, not a setting.  What the app controls is the status
+     * bar, and it always keeps out of it: minimum importance plus an icon
+     * that draws nothing.  There is no user choice here because there was
+     * never a useful one; the visible half is not ours to remove.
+     *
+     * The old normal-importance channel is deleted rather than left behind,
+     * so it stops appearing in the system's per-app notification settings on
+     * devices that ran an earlier build.
      */
     private fun createNotificationChannel() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(
-                CHANNEL_ID,
+                CHANNEL_ID_QUIET,
                 getString(R.string.channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
                 description = getString(R.string.channel_description)
                 setShowBadge(false)
             }
         )
-        nm.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID_QUIET,
-                getString(R.string.channel_name_quiet),
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                description = getString(R.string.channel_description_quiet)
-                setShowBadge(false)
-            }
-        )
+        runCatching { nm.deleteNotificationChannel(CHANNEL_ID) }
     }
 
     /**
      * Undo the notification suspension an earlier build applied.
      *
      * Suspending the package's notifications did hide the icon, but it is a
-     * blunt instrument -- it swallows everything the app might ever post, not
-     * just this one -- and it turned out to be unnecessary: an empty small
-     * icon hides the glyph on its own, on Android 9 and 16 alike.  Devices
-     * that ran the older build are still suspended, and that state survives
-     * app updates, so clear it unconditionally.
+     * blunt instrument -- it swallows everything the app might ever post --
+     * and it is unnecessary now that the icon draws nothing.  That state
+     * survives app updates, so clear it unconditionally on start.
      */
     private fun applyNotificationVisibility() {
         RootShell.exec("cmd notification unsuspend_package $packageName 2>/dev/null", 5000)
@@ -1378,8 +1371,8 @@ class GatewayService : Service() {
     /**
      * Stop the default SMS app announcing messages the gateway has forwarded.
      *
-     * Done here rather than only in the Magisk module so it holds whatever the
-     * module's state is, and so it follows the SMS role if it changes.  The
+     * Done here rather than only in the Magisk module so it holds regardless
+     * of the module's state, and follows the SMS role if it changes.  The
      * package is asked for, never assumed: hardcoding Google Messages meant
      * this silently did nothing on a LineageOS build, which ships
      * com.android.messaging instead.
@@ -1399,33 +1392,21 @@ class GatewayService : Service() {
         RootShell.exec(cmd, 8000)
     }
 
-    /**
-     * Notification id for the channel currently in force.
-     *
-     * A notification's channel is fixed when it is first posted: re-posting
-     * the same id on another channel does not move it.  Giving each channel
-     * its own id makes the switch a genuinely new notification, which does
-     * take -- verified by toggling the setting from the UI and watching the
-     * live notification move between the two ids.  The id no longer in force
-     * is cancelled straight after, so only one is ever shown.
-     */
-    private fun activeNotificationId(): Int =
-        if (activeChannelId() == CHANNEL_ID) NOTIFICATION_ID else NOTIFICATION_ID_QUIET
+    /** The notification id in use.  See [cancelStaleNotification]. */
+    private fun activeNotificationId(): Int = NOTIFICATION_ID_QUIET
 
-    /** Drop whichever of the two notification ids is not currently in use. */
+    /**
+     * Drop the notification id an earlier build used.
+     *
+     * A notification's channel is fixed when it is first posted, so the id
+     * that was bound to the normal-importance channel cannot be reused for a
+     * silent one; it is abandoned and cancelled instead of carried forward.
+     */
     private fun cancelStaleNotification() {
-        val stale = if (activeNotificationId() == NOTIFICATION_ID) NOTIFICATION_ID_QUIET
-                    else NOTIFICATION_ID
-        runCatching { getSystemService(NotificationManager::class.java)?.cancel(stale) }
+        runCatching { getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID) }
     }
 
-    /** Whether the user wants the gateway visible in the status bar. */
-    private fun showStatusBarIcon(): Boolean =
-        getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("show_notification", true)
-
-    /** Which channel the foreground notification should post to right now. */
-    private fun activeChannelId(): String =
-        if (showStatusBarIcon()) CHANNEL_ID else CHANNEL_ID_QUIET
+    private fun activeChannelId(): String = CHANNEL_ID_QUIET
 
     private enum class NotifState { OK, WARN, ERROR }
 
@@ -1448,11 +1429,11 @@ class GatewayService : Service() {
         // not override, so the setting is honoured by drawing nothing.  The
         // notification itself stays, because the platform requires it, and
         // still carries the status text in the shade.
-        val icon = if (!showStatusBarIcon()) R.drawable.ic_notif_blank else when (state) {
-            NotifState.OK -> R.drawable.ic_notif_check
-            NotifState.WARN -> R.drawable.ic_notif_warning
-            NotifState.ERROR -> R.drawable.ic_notif_cross
-        }
+        // Always the empty icon.  The quiet channel is not enough on its own:
+        // Android forces a foreground service's notification up to at least
+        // LOW importance whatever the channel says, and LOW still draws a
+        // glyph.  The icon is the part it does not override.
+        val icon = R.drawable.ic_notif_blank
         // No actions.  The notification carries the gateway's status and
         // nothing else: it is a background service on an unattended handset,
         // and a button there is one nobody is present to press.  Listen-in is

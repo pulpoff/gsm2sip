@@ -554,8 +554,6 @@ class MainActivity : AppCompatActivity() {
             prefs.getBoolean("autoconnect", true)
         findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked =
             prefs.getBoolean("use_stun", true)
-        findViewById<CheckBox>(R.id.cbCfgNotification).isChecked =
-            prefs.getBoolean("show_notification", true)
         findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked =
             prefs.getBoolean("translit_ascii", false)
         findViewById<RadioButton>(
@@ -624,7 +622,6 @@ class MainActivity : AppCompatActivity() {
         val own = ownNumberFields.firstOrNull()?.second?.text?.toString()?.trim().orEmpty()
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
-        val showNotif = findViewById<CheckBox>(R.id.cbCfgNotification).isChecked
         val translit = findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked
         val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
@@ -650,7 +647,6 @@ class MainActivity : AppCompatActivity() {
             }
             .putBoolean("autoconnect", auto)
             .putBoolean("use_stun", useStun)
-            .putBoolean("show_notification", showNotif)
             .putBoolean("translit_ascii", translit)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
@@ -658,7 +654,6 @@ class MainActivity : AppCompatActivity() {
         appendLog(
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
-                "notification=${if (showNotif) "on" else "off"}, " +
                 "ascii=${if (translit) "on" else "off"}, " +
                     "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )
