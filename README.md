@@ -55,12 +55,7 @@ own vendor configuration claims it cannot.  Its
 `audio_policy_configuration.xml` declares no `incall_music_uplink` mixPort and
 no Telephony Tx device, and `mixer_paths.xml` has no incall-music path at all,
 yet the kernel exposes `Incall_Music Audio Mixer MultiMedia1/2` and
-`MultiMedia1 Mixer VOC_REC_DL/UL` regardless.  Read the mixer, not the XML.
-
-It also needs none of the `vsid`/`call_state` announcement the Poco depends
-on: its HAL predates that interface entirely, and marks its own voice session
-active on `MODE_IN_CALL`, which is exactly what LineageOS fails to do on the
-newer HAL.  The older vendor image is an asset here, not a liability.
+`MultiMedia1 Mixer VOC_REC_DL/UL` regardless.
 
 ### Choosing a device
 
