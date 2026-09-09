@@ -1332,10 +1332,9 @@ class GatewayService : Service() {
      *
      * A foreground service must keep a notification and Android will not let
      * that go, so the gateway always has one entry in the shade -- that part
-     * is the platform's, not a setting.  What the app controls is the status
-     * bar, and it always keeps out of it: minimum importance plus an icon
-     * that draws nothing.  There is no user choice here because there was
-     * never a useful one; the visible half is not ours to remove.
+     * is the platform's, not a setting.  Minimum importance keeps it silent
+     * and at the bottom of the shade, which is as unobtrusive as it gets
+     * while still showing the gateway's state.
      *
      * The old normal-importance channel is deleted rather than left behind,
      * so it stops appearing in the system's per-app notification settings on
@@ -1429,11 +1428,25 @@ class GatewayService : Service() {
         // not override, so the setting is honoured by drawing nothing.  The
         // notification itself stays, because the platform requires it, and
         // still carries the status text in the shade.
-        // Always the empty icon.  The quiet channel is not enough on its own:
-        // Android forces a foreground service's notification up to at least
-        // LOW importance whatever the channel says, and LOW still draws a
-        // glyph.  The icon is the part it does not override.
-        val icon = R.drawable.ic_notif_blank
+        // The state icon, in the status bar and in the shade.  An invisible
+        // icon did keep the gateway out of the status bar, but the shade entry
+        // is not removable either way -- Android requires a foreground service
+        // to hold one -- and that entry with a blank space where its icon
+        // belongs looks broken rather than discreet.  So it carries the real
+        // icon, which also makes the gateway's state readable at a glance.
+        // One dot for every state, coloured by state.
+        //
+        // The colour only shows in the notification shade: the status bar
+        // draws small icons monochrome, tinting them to match the bar, so the
+        // dot reads white up there no matter what colour is set.  Shape was
+        // what distinguished the states in the status bar before; a dot trades
+        // that for a quieter icon.
+        val icon = R.drawable.ic_notif_dot
+        val accent = when (state) {
+            NotifState.OK -> 0xFF16A34A.toInt()      // green — registered
+            NotifState.WARN -> 0xFFEAB308.toInt()    // amber — connecting or in transition
+            NotifState.ERROR -> 0xFFDC2626.toInt()   // red — stopped or failed
+        }
         // No actions.  The notification carries the gateway's status and
         // nothing else: it is a background service on an unattended handset,
         // and a button there is one nobody is present to press.  Listen-in is
@@ -1443,6 +1456,7 @@ class GatewayService : Service() {
         return Notification.Builder(this, activeChannelId())
             .setContentTitle(statusText)
             .setSmallIcon(icon)
+            .setColor(accent)
             .setContentIntent(pi)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
