@@ -62,13 +62,9 @@ yet the kernel exposes `Incall_Music Audio Mixer MultiMedia1/2` and
 Support is a property of the **vendor image, not the chip**.  Everything the
 SM6150 profile relies on — the `incall_music` mixer, the `VOC_REC_*` capture
 routing, the `voice_extn` `vsid`/`call_state` interface — is generic Qualcomm
-audio, present across the msm8974→sm8xxx HAL family.  What varies is whether
-the OEM built the feature in, whether their audio policy exposes a route to the
-modem uplink, and which front-end the playback track lands on.  The same SoC
-with two different vendor builds can differ, so listing "supported chips" would
-be misleading.
+audio, present across the msm8974→sm8xxx HAL family. 
 
-Check a candidate instead:
+Check a candidate :
 
 ```bash
 tools/check-device.sh [adb-serial]
