@@ -12,6 +12,7 @@ import android.util.Log
 import com.callagent.gateway.RootShell
 import com.callagent.gateway.gsm.GsmCallManager
 import com.callagent.gateway.rtp.RtpPacket
+import com.callagent.gateway.rtp.SrtpContext
 import com.callagent.gateway.rtp.RtpSession
 import com.callagent.gateway.sip.SipCall
 import com.callagent.gateway.sip.SipClient
@@ -673,6 +674,19 @@ class CallOrchestrator(
 
         activeRtpSession?.stop()
         val session = RtpSession(context, localPort, remoteAddr, remotePort, payloadType)
+
+        // Attach the negotiated SRTP keys, if this call has any.  Done before
+        // start() so no packet is ever sent or accepted unprotected on a call
+        // that agreed to be protected.
+        activeSipCall?.let { call ->
+            val local = call.localSrtpKeys
+            val remote = call.remoteSrtpKeys
+            if (local != null && remote != null) {
+                session.srtpSend = SrtpContext(local)
+                session.srtpRecv = SrtpContext(remote)
+                Log.i(TAG, "SRTP enabled for this call (${local.suite.sdpName})")
+            }
+        }
         session.listener = object : RtpSession.Listener {
             override fun onRtpStarted() {
                 Log.i(TAG, "RTP session started")

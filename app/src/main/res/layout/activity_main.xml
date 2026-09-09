@@ -615,6 +615,24 @@
                             android:paddingTop="6dp" />
 
                         <CheckBox
+                            android:id="@+id/cbCfgSrtp"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Encrypt audio (SRTP)"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:id="@+id/tvCfgSrtpHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="SDES-keyed SRTP (RFC 3711). Requires TLS: the keys travel inside the SIP signalling, so over plain UDP they would be readable by anyone on the path."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
                             android:id="@+id/cbCfgTranslit"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"

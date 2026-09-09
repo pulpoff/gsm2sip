@@ -85,6 +85,32 @@ class RtpSession(
     private var txTimestamp = 0L
     private val txSsrc = (Math.random() * 0xFFFFFFFFL).toLong()
 
+    // ── SRTP ────────────────────────────────────────────
+    // Set before start() when the call negotiated SDES, left null for plain
+    // RTP.  One context per direction: they hold independent keys and their
+    // own rollover counters, and each is touched by exactly one thread --
+    // send by the capture loop, receive by the receive loop.
+
+    @Volatile var srtpSend: SrtpContext? = null
+    @Volatile var srtpRecv: SrtpContext? = null
+
+    /** Packets dropped because they failed authentication. */
+    @Volatile var srtpAuthFailures = 0L
+        private set
+
+    /**
+     * Encrypt if this call is protected, then send.
+     *
+     * If protect() cannot produce a packet the packet is dropped, never sent
+     * in the clear: falling back would silently downgrade a call the user was
+     * told is encrypted, which is worse than losing 20ms of audio.
+     */
+    private fun sendRtp(data: ByteArray, addr: InetAddress, port: Int) {
+        val ctx = srtpSend
+        val out = if (ctx == null) data else (ctx.protect(data) ?: return)
+        socket?.send(DatagramPacket(out, out.size, addr, port))
+    }
+
     // Symmetric RTP: latch onto the actual source address of received packets
     @Volatile private var latchedAddr: InetAddress? = null
     @Volatile private var latchedPort: Int = 0
@@ -192,7 +218,7 @@ class RtpSession(
         try {
             val remoteInet = InetAddress.getByName(remoteAddr)
             val silence = RtpPacket(payloadType, 0, 0, txSsrc, ByteArray(160)).encode()
-            socket?.send(DatagramPacket(silence, silence.size, remoteInet, remotePort))
+            sendRtp(silence, remoteInet, remotePort)
             Log.i(TAG, "Sent NAT punch-through packet to $remoteAddr:$remotePort")
         } catch (e: Exception) {
             Log.w(TAG, "NAT punch-through failed: ${e.message}")
@@ -681,7 +707,7 @@ class RtpSession(
 
                 val packet = RtpPacket(payloadType, txSequence, txTimestamp, txSsrc, silencePayload)
                 val data = packet.encode()
-                socket?.send(DatagramPacket(data, data.size, destAddr, destPort))
+                sendRtp(data, destAddr, destPort)
 
                 txSequence = (txSequence + 1) and 0xFFFF
                 txPacketCount++
@@ -1004,7 +1030,7 @@ class RtpSession(
 
                 val packet = RtpPacket(payloadType, txSequence, txTimestamp, txSsrc, encoded)
                 val data = packet.encode()
-                socket?.send(DatagramPacket(data, data.size, destAddr, destPort))
+                sendRtp(data, destAddr, destPort)
 
                 txSequence = (txSequence + 1) and 0xFFFF
                 txPacketCount++
@@ -1024,7 +1050,30 @@ class RtpSession(
             try {
                 val packet = DatagramPacket(buf, buf.size)
                 socket?.receive(packet) ?: break
-                val rtp = RtpPacket.decode(buf, packet.length) ?: continue
+
+                // Authenticate before parsing.  A packet that fails is a
+                // forgery, a replay or a key mismatch, and none of those
+                // should reach the jitter buffer.
+                var data = buf
+                var len = packet.length
+                val ctx = srtpRecv
+                if (ctx != null) {
+                    val plain = ctx.unprotect(buf, packet.length)
+                    if (plain == null) {
+                        srtpAuthFailures++
+                        // Said out loud, because the symptom of dropping every
+                        // packet is a call that simply dies at the 30s media
+                        // timeout with nothing explaining why.  Rate-limited so
+                        // a wrong key cannot flood the log at 50 packets/s.
+                        if (srtpAuthFailures == 1L || srtpAuthFailures % 100L == 0L) {
+                            Log.w(TAG, "SRTP auth failed on $srtpAuthFailures packet(s) — wrong key or forged")
+                        }
+                        continue
+                    }
+                    data = plain
+                    len = plain.size
+                }
+                val rtp = RtpPacket.decode(data, len) ?: continue
 
                 // Symmetric RTP: latch onto the actual source address
                 if (latchedAddr == null) {

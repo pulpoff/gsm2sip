@@ -558,8 +558,27 @@ class MainActivity : AppCompatActivity() {
             prefs.getBoolean("use_stun", true)
         findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked =
             prefs.getBoolean("translit_ascii", false)
-        findViewById<CheckBox>(R.id.cbCfgTls).isChecked =
-            prefs.getBoolean("sip_tls", false)
+        val cbTls = findViewById<CheckBox>(R.id.cbCfgTls)
+        val cbSrtp = findViewById<CheckBox>(R.id.cbCfgSrtp)
+        cbTls.isChecked = prefs.getBoolean("sip_tls", false)
+        cbSrtp.isChecked = prefs.getBoolean("srtp_enabled", false)
+
+        // SRTP follows TLS in the UI as well as in the code.  The setting is
+        // disabled rather than hidden so it is visible that audio encryption
+        // exists and what it depends on -- a hidden control just looks like a
+        // missing feature.
+        fun syncSrtpEnabled() {
+            cbSrtp.isEnabled = cbTls.isChecked
+            findViewById<TextView>(R.id.tvCfgSrtpHint).text = if (cbTls.isChecked) {
+                "SDES-keyed SRTP (RFC 3711). Audio is encrypted when the server agrees; " +
+                    "if it answers without SRTP the call continues unencrypted and the log says so."
+            } else {
+                "Requires TLS. The keys travel inside the SIP signalling, so over plain UDP " +
+                    "they would be readable by anyone on the path."
+            }
+        }
+        syncSrtpEnabled()
+        cbTls.setOnCheckedChangeListener { _, _ -> syncSrtpEnabled() }
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711
@@ -628,6 +647,9 @@ class MainActivity : AppCompatActivity() {
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
         val translit = findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked
         val tls = findViewById<CheckBox>(R.id.cbCfgTls).isChecked
+        // Stored as asked for, but only ever acted on with TLS — so turning
+        // TLS off and on again does not silently lose the audio setting.
+        val srtp = findViewById<CheckBox>(R.id.cbCfgSrtp).isChecked
         val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
@@ -654,6 +676,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("use_stun", useStun)
             .putBoolean("translit_ascii", translit)
             .putBoolean("sip_tls", tls)
+            .putBoolean("srtp_enabled", srtp)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
             .apply()
@@ -661,6 +684,7 @@ class MainActivity : AppCompatActivity() {
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
                 "tls=${if (tls) "on" else "off"}, " +
+                "srtp=${if (srtp && tls) "on" else "off"}, " +
                 "ascii=${if (translit) "on" else "off"}, " +
                     "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )

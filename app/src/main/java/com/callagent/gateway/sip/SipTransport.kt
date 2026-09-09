@@ -9,6 +9,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
@@ -165,6 +166,13 @@ class TlsSipTransport(
         // SAN/CN check back where it belongs, before the handshake completes.
         s.sslParameters = s.sslParameters.apply {
             endpointIdentificationAlgorithm = "HTTPS"
+            // SNI, set explicitly.  A socket created without a hostname and
+            // then connected to an InetSocketAddress may send no server_name
+            // at all, and a multi-domain host answers that with whatever
+            // certificate it considers default -- which is then rejected for
+            // the wrong reason.  This server's certificate has callagent.pro
+            // as a SAN behind a CN of badrenovo.de, so the name must arrive.
+            serverNames = listOf(SNIHostName(host))
         }
         // Without this the handshake is deferred until the first read, so a
         // certificate failure would surface as a mysterious read error on

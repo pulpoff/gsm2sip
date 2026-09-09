@@ -1,6 +1,8 @@
 package com.callagent.gateway.sip
 
 import android.os.Build
+import com.callagent.gateway.rtp.SrtpCryptoSuite
+import com.callagent.gateway.rtp.SrtpKeys
 import android.util.Log
 import java.net.InetAddress
 import java.net.SocketTimeoutException
@@ -27,8 +29,20 @@ class SipClient(
     /** Public IP discovered via STUN — used in Contact headers and SDP for NAT traversal */
     var publicIp: String = localIp,
     /** SIP over TLS instead of UDP.  Signalling only — RTP is unaffected. */
-    val useTls: Boolean = false
+    val useTls: Boolean = false,
+    /** Offer and accept SDES-keyed SRTP.  Only honoured when [useTls] is on. */
+    private val srtpRequested: Boolean = false
 ) {
+    /**
+     * Whether this call leg may use SRTP at all.
+     *
+     * SDES puts the key in the SDP, so over plaintext UDP anyone who can read
+     * the INVITE can decrypt the audio.  Offering it there would produce a
+     * call that reports itself as encrypted while providing nothing, which is
+     * worse than being plainly unencrypted -- so the transport decides, not
+     * the checkbox alone.
+     */
+    val srtpEnabled: Boolean get() = srtpRequested && useTls
     val serverAddress: Pair<String, Int> get() = Pair(serverDomain, serverPort)
 
     private var transport: SipTransport? = null
@@ -468,6 +482,24 @@ class SipClient(
         // Parse SDP
         msg.sdpRtpPort?.let { call.remoteRtpPort = it }
         msg.sdpAddress?.let { call.remoteRtpAddress = it }
+
+        // SRTP is answered, never volunteered: we key up only if their media
+        // line actually said SAVP.  Our own key is fresh and independent --
+        // reflecting theirs back would mean one key protecting both
+        // directions, which SDES explicitly does not do.
+        if (srtpEnabled && call.absorbRemoteSrtp(msg)) {
+            val suite = call.remoteSrtpKeys?.suite ?: SrtpCryptoSuite.offered
+            call.localSrtpKeys = SrtpKeys.generate(suite)
+            uiLog("SRTP offered by server (${suite.sdpName}) — answering SAVP")
+        } else if (msg.sdpIsSavp) {
+            // They require encryption and we cannot give it.  Better to say so
+            // than to answer AVP and have the call rejected for a reason that
+            // never reaches this log.
+            uiLog(
+                if (!useTls) "Server offered SRTP but signalling is UDP — not accepting keys over cleartext"
+                else "Server offered SRTP but it is switched off here"
+            )
+        }
         call.negotiatedPayloadType = msg.sdpPreferredPayloadType
         Log.i(TAG, "Incoming INVITE codec: pt=${call.negotiatedPayloadType} codecs=${msg.sdpCodecs}")
 
@@ -497,6 +529,11 @@ class SipClient(
         call.fromHeader = "$fromDisplay<sip:$fromUser@$serverDomain>;tag=${call.localTag}"
         call.toHeader = "<sip:$targetExtension@$serverDomain>"
 
+        // Generated once, here, and reused for every retry and re-INVITE of
+        // this call: rekeying mid-dialog is not something chan_sip handles
+        // predictably, and there is no reason to.
+        if (srtpEnabled) call.localSrtpKeys = SrtpKeys.generate(SrtpCryptoSuite.offered)
+
         val targetUri = "sip:$targetExtension@$serverDomain"
         val invite = SipBuilder.invite(
             targetUri, username, serverDomain,
@@ -505,7 +542,8 @@ class SipClient(
             localRtpPort,
             fromTag = call.localTag,
             callerIdNumber = callerIdNumber,
-            callerIdName = callerIdName
+            callerIdName = callerIdName,
+            srtp = call.localSrtpKeys
         )
 
         activeCalls[callId] = call
@@ -651,7 +689,8 @@ class SipClient(
             fromTag = call.localTag,
             callerIdNumber = call.outboundCallerIdNumber,
             callerIdName = call.outboundCallerIdName,
-            auth = auth
+            auth = auth,
+            srtp = call.localSrtpKeys
         )
         sendTo(invite, serverAddress)
     }
@@ -668,6 +707,10 @@ class SipClient(
     /** When the last NAT keepalive went out, so its interval is independent
      *  of how often the monitor loop wakes up. */
     @Volatile private var lastKeepaliveTime = 0L
+
+    /** When the last TLS connect was attempted, and how long to wait again. */
+    @Volatile private var lastTlsAttempt = 0L
+    @Volatile private var tlsBackoffMs = TLS_BACKOFF_MIN_MS
     private val MAX_KEEPALIVE_FAILURES = 3
 
     /** Called when the connection appears dead and needs a full reconnect */
@@ -682,10 +725,25 @@ class SipClient(
                     // REGISTER can go anywhere.  UDP has nothing to reconnect,
                     // so this is skipped there entirely.
                     if (useTls && transport?.isOpen != true) {
-                        try {
-                            createSocket()
-                        } catch (e: Exception) {
-                            uiLog("TLS reconnect failed: ${e.message}")
+                        // Backed off, not retried on every poll.  This host
+                        // runs fail2ban, and a connection attempt every 5s
+                        // while the server is down gets the gateway's address
+                        // banned -- which then looks exactly like the outage
+                        // that started it, and outlives it.
+                        val now = System.currentTimeMillis()
+                        if (now - lastTlsAttempt >= tlsBackoffMs) {
+                            lastTlsAttempt = now
+                            try {
+                                createSocket()
+                                tlsBackoffMs = TLS_BACKOFF_MIN_MS
+                            } catch (e: Exception) {
+                                uiLog(
+                                    "TLS reconnect failed (${e.message}), " +
+                                        "next try in ${tlsBackoffMs / 1000}s"
+                                )
+                                tlsBackoffMs =
+                                    (tlsBackoffMs * 2).coerceAtMost(TLS_BACKOFF_MAX_MS)
+                            }
                         }
                     }
                     // register() rate-limits itself — while the cooldown is
@@ -832,6 +890,10 @@ class SipClient(
 
         /** Read timeout, so both loops notice stop() promptly. */
         private const val SOCKET_TIMEOUT_MS = 5_000
+
+        /** TLS reconnect backoff: doubles on each failure, resets on success. */
+        private const val TLS_BACKOFF_MIN_MS = 5_000L
+        private const val TLS_BACKOFF_MAX_MS = 5 * 60 * 1000L
 
         /**
          * Exponential backoff for REGISTER, shared by every SipClient.

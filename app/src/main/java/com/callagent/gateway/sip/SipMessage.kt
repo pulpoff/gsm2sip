@@ -1,5 +1,7 @@
 package com.callagent.gateway.sip
 
+import com.callagent.gateway.rtp.SrtpKeys
+
 /**
  * Lightweight SIP message parser and builder.
  * Ported from the Python SIP implementation in sip/sip.py
@@ -142,6 +144,39 @@ class SipMessage private constructor(
             }
         }
 
+    /**
+     * True when the peer's media line asks for SRTP (`RTP/SAVP`).
+     *
+     * The profile is what decides whether media is protected -- a crypto line
+     * on an `RTP/AVP` stream is not an SRTP offer, and answering one with
+     * SAVP would send encrypted audio to something expecting plain RTP.
+     */
+    val sdpIsSavp: Boolean
+        get() = body.lineSequence()
+            .firstOrNull { it.startsWith("m=audio") }
+            ?.contains("RTP/SAVP") == true
+
+    /**
+     * The peer's `a=crypto` lines (RFC 4568), in offer order, as
+     * (tag, suite, inline-and-params).  Suites this build cannot do are left
+     * in: the caller picks, and knowing what was offered makes a failure to
+     * agree explainable rather than silent.
+     */
+    val sdpCryptoLines: List<Triple<Int, String, String>>
+        get() = body.lineSequence()
+            .filter { it.startsWith("a=crypto:") }
+            .mapNotNull { line ->
+                // a=crypto:<tag> <suite> inline:<key>[|lifetime][|MKI] [params]
+                val parts = line.removePrefix("a=crypto:").trim().split(Regex("\\s+"), limit = 3)
+                if (parts.size < 3) return@mapNotNull null
+                val tag = parts[0].toIntOrNull() ?: return@mapNotNull null
+                val keyParam = parts[2].split(Regex("\\s+"))
+                    .firstOrNull { it.startsWith("inline:") }
+                    ?.removePrefix("inline:") ?: return@mapNotNull null
+                Triple(tag, parts[1], keyParam)
+            }
+            .toList()
+
     /** Check for custom gateway header: X-GSM-Forward */
     val gsmForwardNumber: String?
         get() = header("x-gsm-forward")?.trim()
@@ -268,11 +303,12 @@ object SipBuilder {
         fromTag: String = tag(),
         callerIdNumber: String? = null,
         callerIdName: String? = null,
-        auth: String? = null
+        auth: String? = null,
+        srtp: SrtpKeys? = null
     ): String {
         val fromDisplay = if (callerIdName != null) "\"$callerIdName\" " else ""
         val fromUser = callerIdNumber ?: username
-        val sdp = buildSdp(localIp, localRtpPort)
+        val sdp = buildSdp(localIp, localRtpPort, srtp)
         return buildString {
             append("INVITE $targetUri SIP/2.0\r\n")
             append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
@@ -356,11 +392,13 @@ object SipBuilder {
         msg: SipMessage,
         username: String, localIp: String, localPort: Int,
         localRtpPort: Int? = null,
-        toTag: String = tag()
+        toTag: String = tag(),
+        srtp: SrtpKeys? = null,
+        srtpTag: Int = 1
     ): String {
         val to = msg.to ?: ""
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
-        val sdp = if (localRtpPort != null) buildSdp(localIp, localRtpPort) else null
+        val sdp = if (localRtpPort != null) buildSdp(localIp, localRtpPort, srtp, srtpTag) else null
         return buildString {
             append("SIP/2.0 200 OK\r\n")
             append("Via: ${msg.via}\r\n")
@@ -491,7 +529,21 @@ object SipBuilder {
             append("Content-Length: 0\r\n\r\n")
         }
 
-    private fun buildSdp(localIp: String, rtpPort: Int): String = buildString {
+    /**
+     * @param srtp keying material for this call, or null for plain RTP.  It is
+     *   a parameter rather than shared state because every call needs its own
+     *   key: one master key reused across calls would let anyone who recorded
+     *   an earlier one decrypt every later one.
+     * @param srtpTag the crypto tag to answer with.  Answering an offer must
+     *   echo the tag that was accepted (RFC 4568 §5.1.2); 1 is right for an
+     *   offer we originate.
+     */
+    private fun buildSdp(
+        localIp: String,
+        rtpPort: Int,
+        srtp: SrtpKeys? = null,
+        srtpTag: Int = 1
+    ): String = buildString {
         // G.722 is wideband (16 kHz sampling) but its SDP clock rate is
         // written as 8000 per RFC 3551 — a historical quirk, not a typo.
         // telephone-event is always offered: it carries DTMF, not voice.
@@ -505,7 +557,13 @@ object SipBuilder {
         append("s=SIP Call\r\n")
         append("c=IN IP4 $localIp\r\n")
         append("t=0 0\r\n")
-        append("m=audio $rtpPort RTP/AVP $payloads\r\n")
+        // SAVP is the SRTP profile.  The transport name and the crypto line
+        // have to agree: one without the other is a malformed offer that a
+        // peer may accept and then fail to decrypt.
+        append("m=audio $rtpPort ${if (srtp != null) "RTP/SAVP" else "RTP/AVP"} $payloads\r\n")
+        if (srtp != null) {
+            append("a=crypto:$srtpTag ${srtp.suite.sdpName} inline:${srtp.toInline()}\r\n")
+        }
         if (codecMode != "g711") append("a=rtpmap:9 G722/8000\r\n")
         if (codecMode != "g722") {
             append("a=rtpmap:8 PCMA/8000\r\n")

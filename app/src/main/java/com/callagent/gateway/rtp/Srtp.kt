@@ -33,8 +33,15 @@ enum class SrtpCryptoSuite(
     val inlineLen: Int get() = keyLen + saltLen
 
     companion object {
-        /** Offered in this order; the first the peer also supports wins. */
-        val preferred = listOf(AES_CM_128_HMAC_SHA1_80, AES_CM_128_HMAC_SHA1_32)
+        /**
+         * What we offer: one line, one suite.
+         *
+         * The server names AES_CM_128_HMAC_SHA1_80 and nothing else, so a
+         * second line would only be an option it cannot take.  The 32-bit
+         * variant is still understood when *answering*, since a different peer
+         * may offer it -- offering and accepting are not the same list.
+         */
+        val offered = AES_CM_128_HMAC_SHA1_80
 
         fun byName(name: String): SrtpCryptoSuite? =
             entries.firstOrNull { it.sdpName.equals(name, ignoreCase = true) }
