@@ -495,10 +495,16 @@ object GsmCallManager {
 
     /** Restore audio state when call ends */
     private fun restoreAudio() {
+        // The mixer restore is a root shell round trip, and this runs on the
+        // main thread: onCallRemoved is an InCallService callback.  Setup
+        // already does its su work on a thread of its own; teardown did not,
+        // so the end of every call blocked the main thread until the shell
+        // answered -- up to the full RootShell timeout when it was slow, and
+        // for the whole timeout when root had been denied.  That stalls the
+        // UI and the service's own callbacks together, since both live in
+        // this one process.
+        Thread({ batchMixerRestore() }, "MixerRestore").start()
         try {
-            // Single su call to restore all mixer controls
-            batchMixerRestore()
-
             inCallService?.let { service ->
                 service.setAudioRoute(CallAudioState.ROUTE_EARPIECE)
 
