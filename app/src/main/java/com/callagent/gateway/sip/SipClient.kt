@@ -653,6 +653,10 @@ class SipClient(
 
     /** Consecutive keepalive failures (OPTIONS sent with no response) */
     @Volatile private var keepaliveFailures = 0
+
+    /** When the last NAT keepalive went out, so its interval is independent
+     *  of how often the monitor loop wakes up. */
+    @Volatile private var lastKeepaliveTime = 0L
     private val MAX_KEEPALIVE_FAILURES = 3
 
     /** Called when the connection appears dead and needs a full reconnect */
@@ -681,8 +685,14 @@ class SipClient(
                     // Keeping the NAT binding open needs a packet every 20-30s,
                     // but it does not need to be a SIP transaction: a bare CRLF
                     // refreshes the mapping and the server neither answers it
-                    // nor logs it.
-                    sendNatKeepalive()
+                    // nor logs it.  Timed on its own clock rather than once per
+                    // iteration, so the loop can poll faster than the binding
+                    // needs packets.
+                    val now = System.currentTimeMillis()
+                    if (now - lastKeepaliveTime >= NAT_KEEPALIVE_INTERVAL_MS) {
+                        sendNatKeepalive()
+                        lastKeepaliveTime = now
+                    }
 
                     // The registration refresh is the only SIP request this
                     // gateway makes while idle.  It is authenticated, it is
@@ -713,7 +723,11 @@ class SipClient(
                 uiLog("Monitor error: ${e.message}")
                 registered = false
             }
-            Thread.sleep(10_000)
+            // Half the shortest thing this loop has to be on time for.  The
+            // keepalive interval is enforced by comparing timestamps, but the
+            // comparison only happens when this wakes, so the period sets the
+            // granularity: at 10s a 25s keepalive actually goes out every 30s.
+            Thread.sleep(POLL_INTERVAL_MS)
         }
     }
 
@@ -746,10 +760,49 @@ class SipClient(
         /** Consecutive failures before asking GatewayService for a new socket. */
         private const val MAX_REGISTER_FAILURES = 3
 
-        /** How often to refresh the registration.  Ten minutes is six
-         *  authenticated requests an hour — ordinary registrar traffic, and
-         *  the only SIP the gateway sends while idle. */
-        private const val REREGISTER_INTERVAL_MS = 10 * 60 * 1000L
+        /**
+         * How often to refresh the registration.
+         *
+         * The REGISTER advertises `expires=3600` and the server grants it --
+         * verified against callagent.pro, whose 200 OK carries `Expires: 3600`
+         * (chan_sip's default).  Half the granted lifetime is the conventional
+         * refresh point: it leaves a full 30 minutes to notice a failure and
+         * retry before the binding actually lapses.
+         *
+         * The previous ten minutes was not derived from anything the server
+         * said -- nothing here reads the granted expiry -- and refreshed six
+         * times an hour where twice will do.  Each refresh is challenged, so
+         * it also put six 401s an hour in the registrar's auth log per device.
+         */
+        private const val REREGISTER_INTERVAL_MS = 30 * 60 * 1000L
+
+        /**
+         * How often to refresh the NAT binding.
+         *
+         * Consumer routers time out an idle UDP mapping somewhere around
+         * 30-60s; 25s stays under the low end with room to spare.  This is
+         * deliberately separate from the monitor loop's own period, which is
+         * about how fast a lost registration is noticed and has no business
+         * setting how often a packet goes on the wire.  Sending one per
+         * 10s iteration meant 360 packets an hour to hold a binding that
+         * needs 144.
+         *
+         * Getting this wrong is not subtle: the server qualifies this peer
+         * with OPTIONS every 60s, and those only arrive while the mapping is
+         * open.  Too long an interval and Asterisk marks the peer UNREACHABLE
+         * and inbound calls stop.
+         */
+        private const val NAT_KEEPALIVE_INTERVAL_MS = 25_000L
+
+        /**
+         * How often the monitor loop wakes.
+         *
+         * It must divide [NAT_KEEPALIVE_INTERVAL_MS], because the keepalive
+         * fires on the first tick at or past the interval -- with a 10s period
+         * a 25s keepalive went out every 30s, measured on the wire.  Waking is
+         * only a couple of timestamp comparisons; it sends nothing on its own.
+         */
+        private const val POLL_INTERVAL_MS = 5_000L
 
         /**
          * Exponential backoff for REGISTER, shared by every SipClient.
