@@ -129,6 +129,14 @@ That is why the gateway moved to a Qualcomm device.
 - **Power**: Always connected to charger
 - **Build host**: Linux with JDK 17+
 
+## Download
+
+Prebuilt APK and Magisk module:
+**[github.com/pulpoff/gsm2sip/releases](https://github.com/pulpoff/gsm2sip/releases)**
+
+Install the Magisk module — it carries the APK as a privileged system app.
+Building from source is only needed to change something; see below.
+
 ## Build
 
 ```bash
