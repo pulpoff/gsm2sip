@@ -67,26 +67,12 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     // Settings-tab views
-    private lateinit var statusDot: View
-    private lateinit var tvStatusText: TextView
-    private lateinit var tvUptime: TextView
     private lateinit var tvLog: TextView
     private lateinit var svLog: ScrollView
-    private lateinit var btnStart: Button
-    private lateinit var btnCopyLog: Button
-    private lateinit var btnConfig: ImageButton
-    private lateinit var btnInfo: ImageButton
 
     // Dialler-tab views
-    private lateinit var tvDialNumber: TextView
-    private lateinit var btnCall: ImageView
 
     // Calls-tab views
-    private lateinit var callLogContainer: LinearLayout
-    private lateinit var callLogScroll: ScrollView
-    private lateinit var tvCallsEmpty: TextView
-    private lateinit var btnFilterIn: ImageButton
-    private lateinit var btnFilterOut: ImageButton
     private var callLogFilter = "IN"
 
     // Pre-cached call log lists (built once, swapped on filter change)
@@ -130,9 +116,6 @@ class MainActivity : AppCompatActivity() {
     private var callFilter = "all"
     private var agentMuted = false
 
-    private lateinit var tabDialer: LinearLayout
-    private lateinit var tabCalls: LinearLayout
-    private lateinit var tabSettings: LinearLayout
     private lateinit var tabLogs: LinearLayout
     private var currentTab = ""
 
@@ -143,7 +126,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvInCallTimer: TextView
     private lateinit var btnInCallEnd: Button
     private lateinit var btnInCallMonitor: Button
-    private lateinit var btnSnoop: Button
     private var monitoring = false
     /** True while a call is bridged, so SNOOP is only offered when it can work. */
     private var callLive = false
@@ -262,7 +244,6 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             if (onlineSince > 0) {
                 val elapsed = (System.currentTimeMillis() - onlineSince) / 1000
-                tvUptime.text = formatDuration(elapsed)
                 uptimeHandler.postDelayed(this, 1000)
             }
         }
@@ -285,13 +266,11 @@ class MainActivity : AppCompatActivity() {
                         if (onlineSince > 0) {
                             uptimeRunnable.run()
                         } else {
-                            tvUptime.text = ""
                         }
                     }
 
                     val wasRunning = running
                     running = state != "STOPPED" && state != "ERROR"
-                    if (running != wasRunning) updateToggleButton()
 
                     val callActive = state in listOf(
                         "GSM_RINGING", "GSM_ANSWERED", "SIP_CALLING",
@@ -299,7 +278,6 @@ class MainActivity : AppCompatActivity() {
                     )
                     if (callActive != gsmCallActive) {
                         gsmCallActive = callActive
-                        updateCallButton()
                     }
 
                     // No pop-up on an incoming call: the home view's live call
@@ -390,9 +368,6 @@ class MainActivity : AppCompatActivity() {
         btnHomeSnoop.setOnClickListener { toggleMonitor() }
         btnHomeEnd.setOnClickListener { endCallFromInCallScreen() }
 
-        tabDialer = findViewById(R.id.tabDialer)
-        tabCalls = findViewById(R.id.tabCalls)
-        tabSettings = findViewById(R.id.tabSettings)
 
         // Named and versioned at the top of settings.  It is the first thing
         // asked for when a change appears not to have taken, and this deploy
@@ -407,13 +382,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnLogsCopy).setOnClickListener { copyLog() }
         findViewById<View>(R.id.btnLogsClear).setOnClickListener { clearLog() }
 
-        // Tab bar buttons
-
-
-        // Settings-tab views
-        statusDot = findViewById(R.id.statusDot)
-        tvStatusText = findViewById(R.id.tvStatusText)
-        tvUptime = findViewById(R.id.tvUptime)
+        // Logs-view views
         tvLog = findViewById(R.id.tvLog)
         svLog = findViewById(R.id.svLog)
 
@@ -422,21 +391,6 @@ class MainActivity : AppCompatActivity() {
         // away exactly the lines worth reading — the ones from before anyone
         // opened the app, which is when the gateway runs unattended.
         tvLog.text = ""
-        btnStart = findViewById(R.id.btnStart)
-        btnCopyLog = findViewById(R.id.btnCopyLog)
-        btnConfig = findViewById(R.id.btnConfig)
-        btnInfo = findViewById(R.id.btnInfo)
-
-        // Dialler-tab views
-        tvDialNumber = findViewById(R.id.tvDialNumber)
-        btnCall = findViewById(R.id.btnCall)
-
-        // Calls-tab views
-        callLogContainer = findViewById(R.id.callLogContainer)
-        callLogScroll = findViewById(R.id.callLogScroll)
-        tvCallsEmpty = findViewById(R.id.tvCallsEmpty)
-        btnFilterIn = findViewById(R.id.btnFilterIn)
-        btnFilterOut = findViewById(R.id.btnFilterOut)
 
         // In-call views
         inCallView = findViewById(R.id.inCallView)
@@ -447,21 +401,6 @@ class MainActivity : AppCompatActivity() {
         btnInCallEnd.setOnClickListener { endCallFromInCallScreen() }
         btnInCallMonitor = findViewById(R.id.btnInCallMonitor)
         btnInCallMonitor.setOnClickListener { toggleMonitor() }
-        btnSnoop = findViewById(R.id.btnSnoop)
-        btnSnoop.setOnClickListener { toggleMonitor() }
-
-        // Settings-tab click listeners
-        btnStart.setOnClickListener { if (running) stopGateway() else startGateway() }
-        btnCopyLog.setOnClickListener { copyLog() }
-        btnConfig.setOnClickListener { showConfigDialog() }
-        btnInfo.setOnClickListener { showInfoDialog() }
-        // Calls-tab click listeners
-        findViewById<ImageButton>(R.id.btnCallLogClear).setOnClickListener { confirmClearCallLog() }
-        btnFilterIn.setOnClickListener { setCallLogFilter("IN") }
-        btnFilterOut.setOnClickListener { setCallLogFilter("OUT") }
-
-        setupDialler()
-        preloadCallLog()
 
         requestPermissions()
         requestBatteryOptimizationExemption()
@@ -488,7 +427,6 @@ class MainActivity : AppCompatActivity() {
         val pass = prefs.getString("pass", "") ?: ""
         GatewayService.start(this, server, port, user, pass)
         running = true
-        updateToggleButton()
         appendLog("Auto-starting gateway: $user@$server:$port")
     }
 
@@ -504,13 +442,9 @@ class MainActivity : AppCompatActivity() {
 
         tabHome.visibility = if (tab == "home") View.VISIBLE else View.GONE
         tabConfig.visibility = if (tab == "config") View.VISIBLE else View.GONE
-        tabDialer.visibility = if (tab == "dialer") View.VISIBLE else View.GONE
-        tabCalls.visibility = if (tab == "calls") View.VISIBLE else View.GONE
-        tabSettings.visibility = if (tab == "settings") View.VISIBLE else View.GONE
         tabLogs.visibility = if (tab == "logs") View.VISIBLE else View.GONE
 
         when (tab) {
-            "calls" -> refreshCallLog()
             "home" -> refreshHome()
             // The view scrolls as lines arrive, but only while it is visible;
             // opening it has to jump to the newest entry itself.
@@ -621,6 +555,8 @@ class MainActivity : AppCompatActivity() {
             prefs.getBoolean("use_stun", true)
         findViewById<CheckBox>(R.id.cbCfgNotification).isChecked =
             prefs.getBoolean("show_notification", true)
+        findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked =
+            prefs.getBoolean("translit_ascii", false)
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711
@@ -657,6 +593,7 @@ class MainActivity : AppCompatActivity() {
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
         val showNotif = findViewById<CheckBox>(R.id.cbCfgNotification).isChecked
+        val translit = findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked
         val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
@@ -682,6 +619,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("autoconnect", auto)
             .putBoolean("use_stun", useStun)
             .putBoolean("show_notification", showNotif)
+            .putBoolean("translit_ascii", translit)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
             .apply()
@@ -689,6 +627,7 @@ class MainActivity : AppCompatActivity() {
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
                 "notification=${if (showNotif) "on" else "off"}, " +
+                "ascii=${if (translit) "on" else "off"}, " +
                     "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )
         Toast.makeText(this, "Saved — reconnecting", Toast.LENGTH_SHORT).show()
@@ -1375,13 +1314,14 @@ class MainActivity : AppCompatActivity() {
                 callTimerHandler.removeCallbacks(gsmPollRunnable)
                 callTimerHandler.postDelayed(gsmPollRunnable, 500)
             }
-        } else if (currentTab == "dialer") {
-            refreshCallButtonState()
         }
 
-        // Refresh calls tab if visible
-        if (currentTab == "calls") {
-            refreshCallLog()
+        // Refresh the traffic list if it is the visible one.  This used to be
+        // guarded on the old Calls tab, so after that tab went the home list
+        // stopped being refreshed here at all and showed a stale view until
+        // something else rebuilt it.
+        if (currentTab == "home") {
+            refreshHome()
         }
 
         // Re-apply the chip highlight: the visual state is set in code, so it
@@ -1410,237 +1350,9 @@ class MainActivity : AppCompatActivity() {
 
     // ── Config Dialog ────────────────────────────────────
 
-    private fun showConfigDialog() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val view = layoutInflater.inflate(R.layout.dialog_config, null)
-
-        val etServer = view.findViewById<EditText>(R.id.etSipServer)
-        val etPort = view.findViewById<EditText>(R.id.etSipPort)
-        val etUser = view.findViewById<EditText>(R.id.etSipUser)
-        val etPassword = view.findViewById<EditText>(R.id.etSipPassword)
-        val etOwnNumber = view.findViewById<EditText>(R.id.etOwnNumber)
-        val cbAutoconnect = view.findViewById<CheckBox>(R.id.cbAutoconnect)
-
-        etServer.setText(prefs.getString("server", "callagent.pro"))
-        etPort.setText(prefs.getInt("port", 5060).toString())
-        etUser.setText(prefs.getString("user", ""))
-        etPassword.setText(prefs.getString("pass", ""))
-        etOwnNumber.setText(prefs.getString("own_number", "+49123123123123"))
-        cbAutoconnect.isChecked = prefs.getBoolean("autoconnect", true)
-
-        AlertDialog.Builder(this)
-            .setTitle("SIP Configuration")
-            .setView(view)
-            .setPositiveButton("Save") { _, _ ->
-                val server = etServer.text.toString().trim()
-                val port = etPort.text.toString().trim().toIntOrNull() ?: 5060
-                val user = etUser.text.toString().trim()
-                val pass = etPassword.text.toString().trim()
-                val ownNumber = etOwnNumber.text.toString().trim()
-                prefs.edit()
-                    .putString("server", server)
-                    .putInt("port", port)
-                    .putString("user", user)
-                    .putString("pass", pass)
-                    .putString("own_number", ownNumber)
-                    .putBoolean("autoconnect", cbAutoconnect.isChecked)
-                    .apply()
-                appendLog(
-                    "Config saved: $user@$server:$port " +
-                        "(own=${ownNumber.ifEmpty { "auto" }}, autoconnect=${cbAutoconnect.isChecked})"
-                )
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     // ── Info Dialog ─────────────────────────────────────
 
     @SuppressLint("MissingPermission")
-    private fun showInfoDialog() {
-        val view = layoutInflater.inflate(R.layout.dialog_info, null)
-
-        val tvGsmNetwork = view.findViewById<TextView>(R.id.tvGsmNetwork)
-        val tvNetworkType = view.findViewById<TextView>(R.id.tvNetworkType)
-        val tvGsmSignal = view.findViewById<TextView>(R.id.tvGsmSignal)
-        val tvCellId = view.findViewById<TextView>(R.id.tvCellId)
-        val tvImei = view.findViewById<TextView>(R.id.tvImei)
-        val tvPhoneNumber = view.findViewById<TextView>(R.id.tvPhoneNumber)
-        val tvWifiNetwork = view.findViewById<TextView>(R.id.tvWifiNetwork)
-        val tvWifiType = view.findViewById<TextView>(R.id.tvWifiType)
-        val tvWifiSignal = view.findViewById<TextView>(R.id.tvWifiSignal)
-        val tvWifiIp = view.findViewById<TextView>(R.id.tvWifiIp)
-        val tvPublicIp = view.findViewById<TextView>(R.id.tvPublicIp)
-
-        val hasPhonePerm = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.READ_PHONE_STATE
-        ) == PackageManager.PERMISSION_GRANTED
-        val hasLocationPerm = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-
-        tvGsmNetwork.text = tm.networkOperatorName.ifEmpty { "N/A" }
-
-        if (hasPhonePerm) {
-            @Suppress("DEPRECATION")
-            val netType = tm.networkType
-            tvNetworkType.text = networkTypeName(netType)
-        } else {
-            tvNetworkType.text = "No permission"
-        }
-
-        if (hasPhonePerm) {
-            try {
-                val number = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val subMgr = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-                    subMgr.getPhoneNumber(SubscriptionManager.getDefaultSubscriptionId())
-                } else {
-                    @Suppress("DEPRECATION")
-                    tm.line1Number
-                }
-                tvPhoneNumber.text = if (number.isNullOrEmpty()) "N/A" else number
-            } catch (_: Exception) {
-                tvPhoneNumber.text = "N/A"
-            }
-
-            try {
-                val imei = tm.getImei(0)
-                    ?: tm.getImei(1)
-                    ?: tm.imei
-                tvImei.text = imei ?: "N/A"
-            } catch (_: SecurityException) {
-                try {
-                    val androidId = android.provider.Settings.Secure.getString(
-                        contentResolver, android.provider.Settings.Secure.ANDROID_ID
-                    )
-                    tvImei.text = androidId ?: "N/A"
-                } catch (_: Exception) {
-                    tvImei.text = "N/A"
-                }
-            } catch (_: Exception) {
-                tvImei.text = "N/A"
-            }
-        } else {
-            tvPhoneNumber.text = "No permission"
-            tvImei.text = "No permission"
-        }
-
-        if (hasLocationPerm) {
-            try {
-                val cellInfo = tm.allCellInfo?.firstOrNull()
-                // Subject-less, so the API 29 CellInfoNr type test can be
-                // guarded — the guard has to sit outside the `is`, not inside
-                // the branch, or the class is resolved before it runs.
-                when {
-                    cellInfo is CellInfoLte -> {
-                        tvCellId.text = cellInfo.cellIdentity.ci.let {
-                            if (it == Int.MAX_VALUE) "N/A" else it.toString()
-                        }
-                        tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
-                    }
-                    cellInfo is CellInfoGsm -> {
-                        tvCellId.text = cellInfo.cellIdentity.cid.let {
-                            if (it == Int.MAX_VALUE) "N/A" else it.toString()
-                        }
-                        tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
-                    }
-                    cellInfo is CellInfoWcdma -> {
-                        tvCellId.text = cellInfo.cellIdentity.cid.let {
-                            if (it == Int.MAX_VALUE) "N/A" else it.toString()
-                        }
-                        tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
-                    }
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                        cellInfo is CellInfoNr -> {
-                        val id = cellInfo.cellIdentity as? android.telephony.CellIdentityNr
-                        tvCellId.text = id?.nci?.let {
-                            if (it == Long.MAX_VALUE) "N/A" else it.toString()
-                        } ?: "N/A"
-                        tvGsmSignal.text = "${cellInfo.cellSignalStrength.level}/4 (${cellInfo.cellSignalStrength.dbm} dBm)"
-                    }
-                    else -> {
-                        tvCellId.text = "N/A"
-                        tvGsmSignal.text = "N/A"
-                    }
-                }
-            } catch (_: Exception) {
-                tvCellId.text = "N/A"
-                tvGsmSignal.text = "N/A"
-            }
-        } else {
-            tvCellId.text = "No permission"
-            tvGsmSignal.text = "No permission"
-        }
-
-        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        @Suppress("DEPRECATION")
-        val wifiInfo = wm.connectionInfo
-        if (wifiInfo != null && wifiInfo.networkId != -1) {
-            @Suppress("DEPRECATION")
-            val ssid = wifiInfo.ssid?.replace("\"", "") ?: "N/A"
-            tvWifiNetwork.text = if (ssid == "<unknown ssid>") "N/A (no location permission)" else ssid
-            @Suppress("DEPRECATION")
-            val freq = wifiInfo.frequency
-            tvWifiType.text = when {
-                freq in 2400..2500 -> "2.4 GHz"
-                freq in 5000..5900 -> "5 GHz"
-                freq in 5925..7125 -> "6 GHz"
-                else -> "${freq} MHz"
-            }
-            @Suppress("DEPRECATION")
-            val rssi = wifiInfo.rssi
-            val level = WifiManager.calculateSignalLevel(rssi, 5)
-            tvWifiSignal.text = "$level/4 ($rssi dBm)"
-
-            @Suppress("DEPRECATION")
-            val ip = wifiInfo.ipAddress
-            if (ip != 0) {
-                tvWifiIp.text = String.format(
-                    "%d.%d.%d.%d",
-                    ip and 0xff, ip shr 8 and 0xff,
-                    ip shr 16 and 0xff, ip shr 24 and 0xff
-                )
-            } else {
-                tvWifiIp.text = "N/A"
-            }
-        } else {
-            tvWifiNetwork.text = "Not connected"
-            tvWifiType.text = "—"
-            tvWifiSignal.text = "—"
-            tvWifiIp.text = "—"
-        }
-
-        Thread {
-            val pubIp = try {
-                java.net.URL("https://api.ipify.org").readText().trim()
-            } catch (_: Exception) {
-                "N/A"
-            }
-            runOnUiThread { tvPublicIp.text = pubIp }
-        }.start()
-
-        val btnCheck = view.findViewById<Button>(R.id.btnCheckSupport)
-        val resultsContainer = view.findViewById<LinearLayout>(R.id.checkResultsContainer)
-        btnCheck.setOnClickListener {
-            btnCheck.isEnabled = false
-            btnCheck.text = "Checking…"
-            resultsContainer.visibility = View.VISIBLE
-            resultsContainer.removeAllViews()
-            runGatewayChecks(resultsContainer) {
-                btnCheck.text = "Check Gateway Support"
-                btnCheck.isEnabled = true
-            }
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Device Info")
-            .setView(view)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-
     // ── Gateway Support Checks ─────────────────────────
 
     private fun runGatewayChecks(container: LinearLayout, onDone: () -> Unit) {
@@ -1885,300 +1597,9 @@ class MainActivity : AppCompatActivity() {
 
     // ── Call Log (Calls Tab) ─────────────────────────────
 
-    private fun setCallLogFilter(filter: String) {
-        callLogFilter = filter
-
-        val activeColor = ContextCompat.getColor(this, R.color.primary)
-        val inactiveColor = 0xFF374151.toInt()
-        val activeIconTint = ColorStateList.valueOf(Color.WHITE)
-        val inactiveIconTint = ColorStateList.valueOf(0xFF9CA3AF.toInt())
-
-        if (filter == "IN") {
-            btnFilterIn.backgroundTintList = ColorStateList.valueOf(activeColor)
-            btnFilterIn.imageTintList = activeIconTint
-            btnFilterOut.backgroundTintList = ColorStateList.valueOf(inactiveColor)
-            btnFilterOut.imageTintList = inactiveIconTint
-        } else {
-            btnFilterOut.backgroundTintList = ColorStateList.valueOf(activeColor)
-            btnFilterOut.imageTintList = activeIconTint
-            btnFilterIn.backgroundTintList = ColorStateList.valueOf(inactiveColor)
-            btnFilterIn.imageTintList = inactiveIconTint
-        }
-
-        // Use cached data — instant switch, no I/O
-        showCallLog()
-    }
-
     /** Pre-load both IN and OUT lists off the main thread so tab switching is instant */
-    private fun preloadCallLog() {
-        val ctx = this
-        Thread {
-            val all = CallLogStore.getEntries(ctx)
-            cachedInEntries = all.filter { it.direction == "IN" }.take(MAX_CALL_LOG)
-            cachedOutEntries = all.filter { it.direction == "OUT" }.take(MAX_CALL_LOG)
-            callLogBuiltIn = false
-            callLogBuiltOut = false
-            // Build current filter's UI
-            runOnUiThread { showCallLog() }
-        }.start()
-    }
-
-    private fun refreshCallLog() {
-        preloadCallLog()
-    }
-
     /** Show the already-cached list for the current filter — runs on UI thread, no I/O */
-    private fun showCallLog() {
-        val entries = if (callLogFilter == "IN") cachedInEntries else cachedOutEntries
-        buildCallLogUI(entries)
-    }
-
-    private fun buildCallLogUI(entries: List<CallLogEntry>) {
-        callLogContainer.removeAllViews()
-
-        if (entries.isEmpty()) {
-            callLogScroll.visibility = View.GONE
-            tvCallsEmpty.visibility = View.VISIBLE
-            return
-        }
-
-        callLogScroll.visibility = View.VISIBLE
-        tvCallsEmpty.visibility = View.GONE
-
-        val dp = resources.displayMetrics.density
-        val dateFmt = SimpleDateFormat("dd/MM HH:mm", Locale.US)
-        val cardBg = android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF374151.toInt())
-            cornerRadius = 16 * dp
-        }
-
-        for (entry in entries) {
-            val number = entry.number.ifEmpty { "Unknown" }
-
-            val rowView = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding((16 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt())
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    bottomMargin = (4 * dp).toInt()
-                }
-                background = android.graphics.drawable.RippleDrawable(
-                    ColorStateList.valueOf(0x40FFFFFF),
-                    android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0xFF1F2937.toInt())
-                        cornerRadius = 12 * dp
-                    },
-                    android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0xFFFFFFFF.toInt())
-                        cornerRadius = 12 * dp
-                    }
-                )
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    // A message row opens its detail; a call row still dials.
-                    // The green call button next to it dials either way.
-                    if (entry.type == CallLogStore.TYPE_SMS) showSmsDetails(entry)
-                    else openDiallerWithNumber(number)
-                }
-            }
-
-            // Two-line text block (number + details)
-            val textBlock = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val tvNum = TextView(this).apply {
-                text = number
-                textSize = 16f
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(0xFFFFFFFF.toInt())
-            }
-
-            // Second line: direction icon + date + duration
-            val detailRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = (4 * dp).toInt()
-                }
-            }
-
-            val dirIcon = ImageView(this).apply {
-                layoutParams = LinearLayout.LayoutParams((16 * dp).toInt(), (16 * dp).toInt())
-                setImageResource(
-                    if (entry.direction == "IN") R.drawable.ic_call_incoming
-                    else R.drawable.ic_call_outgoing
-                )
-                setColorFilter(0xFF9CA3AF.toInt())
-            }
-
-            val tvDate = TextView(this).apply {
-                text = dateFmt.format(Date(entry.timestamp))
-                textSize = 13f
-                maxLines = 1
-                setTextColor(0xFF9CA3AF.toInt())
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = (6 * dp).toInt()
-                }
-            }
-
-            val tvDur = TextView(this).apply {
-                text = formatDurationCompact(entry.durationSec)
-                textSize = 13f
-                maxLines = 1
-                setTextColor(0xFF9CA3AF.toInt())
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = (12 * dp).toInt()
-                }
-            }
-
-            detailRow.addView(dirIcon)
-            detailRow.addView(tvDate)
-            detailRow.addView(tvDur)
-
-            textBlock.addView(tvNum)
-            textBlock.addView(detailRow)
-
-            // Call button on right side
-            val btnCall = ImageView(this).apply {
-                val btnSize = (40 * dp).toInt()
-                layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
-                    marginStart = (12 * dp).toInt()
-                }
-                setImageResource(R.drawable.ic_phone_call)
-                setColorFilter(0xFF10B981.toInt())
-                setPadding((8 * dp).toInt(), (8 * dp).toInt(), (8 * dp).toInt(), (8 * dp).toInt())
-                background = android.graphics.drawable.RippleDrawable(
-                    ColorStateList.valueOf(0x4010B981),
-                    android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0xFF374151.toInt())
-                        cornerRadius = 20 * dp
-                    },
-                    android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0xFFFFFFFF.toInt())
-                        cornerRadius = 20 * dp
-                    }
-                )
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { openDiallerWithNumber(number) }
-            }
-
-            rowView.addView(textBlock)
-            rowView.addView(btnCall)
-            callLogContainer.addView(rowView)
-        }
-    }
-
-    private fun openDiallerWithNumber(number: String) {
-        tvDialNumber.text = number
-        switchTab("dialer")
-    }
-
-    private fun confirmClearCallLog() {
-        AlertDialog.Builder(this)
-            .setTitle("Clear Call Log")
-            .setMessage("Delete all call history? This cannot be undone.")
-            .setPositiveButton("Delete") { _, _ ->
-                CallLogStore.clear(this)
-                startService(Intent(this, GatewayService::class.java).apply {
-                    action = GatewayService.ACTION_RELOAD_STATS
-                })
-                Toast.makeText(this, "Call log cleared", Toast.LENGTH_SHORT).show()
-                refreshCallLog()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     // ── Dialler ──────────────────────────────────────────
-
-    private fun setupDialler() {
-        val digitButtons = mapOf(
-            R.id.btnDial0 to "0", R.id.btnDial1 to "1", R.id.btnDial2 to "2",
-            R.id.btnDial3 to "3", R.id.btnDial4 to "4", R.id.btnDial5 to "5",
-            R.id.btnDial6 to "6", R.id.btnDial7 to "7", R.id.btnDial8 to "8",
-            R.id.btnDial9 to "9", R.id.btnDialStar to "*", R.id.btnDialHash to "#",
-            R.id.btnDialPlus to "+"
-        )
-        for ((id, digit) in digitButtons) {
-            findViewById<TextView>(id).setOnClickListener { appendDigit(digit) }
-        }
-
-        findViewById<TextView>(R.id.btnBackspace).setOnClickListener { deleteLastDigit() }
-        findViewById<TextView>(R.id.btnBackspace).setOnLongClickListener {
-            tvDialNumber.text = ""
-            true
-        }
-
-        btnCall.setOnClickListener { onCallButtonPressed() }
-    }
-
-    private fun refreshCallButtonState() {
-        gsmCallActive = com.callagent.gateway.gsm.GsmCallManager.activeCall != null
-        updateCallButton()
-    }
-
-    private fun appendDigit(digit: String) {
-        tvDialNumber.append(digit)
-    }
-
-    private fun deleteLastDigit() {
-        val current = tvDialNumber.text.toString()
-        if (current.isNotEmpty()) {
-            tvDialNumber.text = current.dropLast(1)
-        }
-    }
-
-    private fun onCallButtonPressed() {
-        if (inCallOpen) return
-
-        if (gsmCallActive || com.callagent.gateway.gsm.GsmCallManager.activeCall != null) {
-            // A call is already up — the home view shows it.
-            switchTab("home")
-            return
-        }
-
-        val number = tvDialNumber.text.toString().trim()
-        if (number.isEmpty()) {
-            Toast.makeText(this, "Enter a number to call", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (com.callagent.gateway.gsm.GsmCallManager.isMmiCode(number)) {
-            appendLog("Sending MMI $number")
-            com.callagent.gateway.gsm.GsmCallManager.sendMmi(this, number) { result ->
-                runOnUiThread {
-                    appendLog("MMI result: $result")
-                    Toast.makeText(this, result, Toast.LENGTH_LONG).show()
-                }
-            }
-            return
-        }
-
-        switchTab("home")
-
-        if (running) {
-            val intent = Intent(this, GatewayService::class.java).apply {
-                action = GatewayService.ACTION_DIAL
-                putExtra(GatewayService.EXTRA_NUMBER, number)
-            }
-            startService(intent)
-        } else {
-            com.callagent.gateway.gsm.GsmCallManager.makeCall(this, number)
-        }
-
-        appendLog("Dialling $number")
-    }
 
     // ── In-Call Screen ───────────────────────────────────
 
@@ -2216,11 +1637,6 @@ class MainActivity : AppCompatActivity() {
                 if (monitoring) R.drawable.ic_fa_circle_stop else R.drawable.ic_fa_headphones
             )
         }
-        if (::btnSnoop.isInitialized) {
-            btnSnoop.text = if (monitoring) "STOP" else "SNOOP"
-            // Only usable while audio is actually flowing.
-            btnSnoop.isEnabled = callLive
-        }
     }
 
     private fun openInCallScreen(number: String) {
@@ -2254,10 +1670,10 @@ class MainActivity : AppCompatActivity() {
         inCallView.visibility = View.GONE
         tabbedRoot.visibility = View.VISIBLE
         gsmCallActive = false
-        updateCallButton()
-        // Refresh calls list if returning to calls tab
-        if (currentTab == "calls") {
-            refreshCallLog()
+        // Refresh the traffic list on returning from a call, so the call that
+        // just ended is there.
+        if (currentTab == "home") {
+            refreshHome()
         }
     }
 
@@ -2268,16 +1684,6 @@ class MainActivity : AppCompatActivity() {
             com.callagent.gateway.gsm.GsmCallManager.hangupCall()
         } else {
             closeInCallScreen()
-        }
-    }
-
-    private fun updateCallButton() {
-        runOnUiThread {
-            if (gsmCallActive) {
-                btnCall.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-            } else {
-                btnCall.backgroundTintList = null
-            }
         }
     }
 
@@ -2298,7 +1704,6 @@ class MainActivity : AppCompatActivity() {
         GatewayService.start(this, server, port, user, pass)
 
         running = true
-        updateToggleButton()
 
         appendLog("Starting gateway: $user@$server:$port")
     }
@@ -2306,17 +1711,6 @@ class MainActivity : AppCompatActivity() {
     private fun stopGateway() {
         GatewayService.stop(this)
         running = false
-        updateToggleButton()
-    }
-
-    private fun updateToggleButton() {
-        if (running) {
-            btnStart.text = "STOP"
-            btnStart.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        } else {
-            btnStart.text = "START"
-            btnStart.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#16A34A"))
-        }
     }
 
     private fun updateStatus(state: String, info: String) {
@@ -2326,27 +1720,6 @@ class MainActivity : AppCompatActivity() {
         updateMonitorButtons()
         updateHomeCall(state, info)
 
-        val dotColor = when (state) {
-            "IDLE" -> if (sipRegistered) "#16A34A" else "#DC2626"
-            // Blue rather than the idle green: a live call should be
-            // distinguishable at a glance from merely being registered.
-            "BRIDGED" -> "#2563EB"
-            "STARTING", "GSM_RINGING", "GSM_ANSWERED",
-            "SIP_CALLING", "SIP_RINGING", "GSM_DIALING",
-            "TEARING_DOWN" -> "#EAB308"
-            else -> "#DC2626"
-        }
-        statusDot.backgroundTintList = ColorStateList.valueOf(Color.parseColor(dotColor))
-
-        val text = when (state) {
-            "IDLE" -> if (sipRegistered) "Registered — Ready" else info
-            "BRIDGED" -> "● LIVE CALL — $info"
-            "STOPPED" -> "Stopped"
-            "ERROR" -> info
-            "STARTING" -> info
-            else -> info
-        }
-        tvStatusText.text = text
     }
 
     private fun appendLog(msg: String) {

@@ -274,6 +274,10 @@ class GatewayService : Service() {
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
+        thread(name = "notif-setup") {
+            applyNotificationVisibility()
+            silenceDefaultSmsApp()
+        }
         Log.i(TAG, "GatewayService created")
     }
 
@@ -385,18 +389,18 @@ class GatewayService : Service() {
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
             ACTION_SMS_SEND -> {
-                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                startForeground(activeNotificationId(), buildNotification(notifState))
                 dispatchOutbox()
             }
             ACTION_SMS_REPORT -> {
-                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                startForeground(activeNotificationId(), buildNotification(notifState))
                 reportOutbox(intent.getStringExtra(EXTRA_SMS_ID))
             }
             ACTION_SMS_FLUSH -> {
                 // Started with startForegroundService() from the SMS receiver,
                 // so the foreground promise has to be honoured — with the
                 // notification it already has, not a new one.
-                startForeground(NOTIFICATION_ID, buildNotification(notifState))
+                startForeground(activeNotificationId(), buildNotification(notifState))
                 flushSmsQueue("received")
             }
             ACTION_DIAL -> dialFromDialler(intent)
@@ -443,8 +447,19 @@ class GatewayService : Service() {
         // rather than at the next restart -- the channel is chosen when the
         // notification is built.  Done before the validity check below, since
         // the setting is independent of whether SIP is configured.
-        runCatching { startForeground(NOTIFICATION_ID, buildNotification(notifState)) }
-            .onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
+        // Remove before re-posting.  A notification's channel is fixed when it
+        // is first posted: re-posting the same id on a different channel is
+        // silently ignored, so toggling the status bar setting appeared to do
+        // nothing until the service happened to restart.  Measured both ways
+        // -- quiet to normal and back -- and neither moved without this.
+        runCatching {
+            startForeground(activeNotificationId(), buildNotification(notifState))
+            cancelStaleNotification()
+        }.onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
+        thread(name = "notif-visibility") {
+            applyNotificationVisibility()
+            silenceDefaultSmsApp()
+        }
         cfgServer = prefs.getString("server", "") ?: ""
         cfgPort = prefs.getInt("port", 5060)
         cfgUser = prefs.getString("user", "") ?: ""
@@ -591,7 +606,20 @@ class GatewayService : Service() {
             ?: msg.requestUri?.let { msg.extractUser(it) }
             ?: msg.to?.let { msg.extractUser(it) })
             ?.trim().orEmpty()
-        val text = msg.body
+        // Reduce to ASCII before anything measures or stores the text, so the
+        // part count, the encoding and the log all describe what actually
+        // goes out rather than what the server sent.
+        val rawText = msg.body
+        val text = if (getSharedPreferences("gateway", MODE_PRIVATE)
+                .getBoolean("translit_ascii", false)
+        ) {
+            com.callagent.gateway.sms.Transliterate.toAscii(rawText)
+        } else {
+            rawText
+        }
+        if (text != rawText) {
+            broadcastLog("SMS send: transliterated to ASCII (${rawText.length} -> ${text.length} chars)")
+        }
         if (target.isEmpty() || text.isEmpty()) {
             broadcastLog("SMS send refused: missing recipient or body")
             return 400 to emptyList()
@@ -1047,14 +1075,14 @@ class GatewayService : Service() {
         notifStatusText = "Connecting"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
-                NOTIFICATION_ID,
+                activeNotificationId(),
                 buildNotification(NotifState.WARN, "Connecting"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             )
         } else {
             startForeground(
-                NOTIFICATION_ID,
+                activeNotificationId(),
                 buildNotification(NotifState.WARN, "Connecting")
             )
         }
@@ -1333,6 +1361,69 @@ class GatewayService : Service() {
         )
     }
 
+    /**
+     * Make the status bar preference real on releases that ignore the channel.
+     *
+     * A minimum-importance channel is enough on Android 16, but Android 12 and
+     * earlier force a foreground service's notification to stay visible
+     * whatever the channel says -- neither IMPORTANCE_MIN nor the
+     * POST_NOTIFICATION appop removes the icon, both were measured.
+     * Suspending the package's notifications does remove it, and the service
+     * keeps running: verified still registered and bridging afterwards.
+     *
+     * Not persisted by the platform, so it is re-applied on every start.
+     */
+    private fun applyNotificationVisibility() {
+        val show = getSharedPreferences("gateway", MODE_PRIVATE)
+            .getBoolean("show_notification", true)
+        val verb = if (show) "unsuspend_package" else "suspend_package"
+        RootShell.exec("cmd notification $verb $packageName 2>/dev/null", 5000)
+    }
+
+    /**
+     * Stop the default SMS app announcing messages the gateway has forwarded.
+     *
+     * Done here rather than only in the Magisk module so it holds whatever the
+     * module's state is, and so it follows the SMS role if it changes.  The
+     * package is asked for, never assumed: hardcoding Google Messages meant
+     * this silently did nothing on a LineageOS build, which ships
+     * com.android.messaging instead.
+     */
+    private fun silenceDefaultSmsApp() {
+        val cmd = buildString {
+            append("d=\$(settings get secure sms_default_application 2>/dev/null | tr -d '\\r'); ")
+            append("case \"\$d\" in null|'') d=\"\";; esac; ")
+            append("for p in \$d com.google.android.apps.messaging com.android.messaging; do ")
+            append("[ -n \"\$p\" ] || continue; ")
+            append("pm path \"\$p\" >/dev/null 2>&1 || continue; ")
+            append("pm revoke \"\$p\" android.permission.POST_NOTIFICATIONS 2>/dev/null; ")
+            append("cmd appops set \"\$p\" POST_NOTIFICATION ignore 2>/dev/null; ")
+            append("cmd notification suspend_package \"\$p\" 2>/dev/null; ")
+            append("done")
+        }
+        RootShell.exec(cmd, 8000)
+    }
+
+    /**
+     * Notification id for the channel currently in force.
+     *
+     * A notification's channel is fixed when it is first posted: re-posting
+     * the same id on another channel does not move it.  Giving each channel
+     * its own id makes the switch a genuinely new notification, which does
+     * take -- verified by toggling the setting from the UI and watching the
+     * live notification move between the two ids.  The id no longer in force
+     * is cancelled straight after, so only one is ever shown.
+     */
+    private fun activeNotificationId(): Int =
+        if (activeChannelId() == CHANNEL_ID) NOTIFICATION_ID else NOTIFICATION_ID_QUIET
+
+    /** Drop whichever of the two notification ids is not currently in use. */
+    private fun cancelStaleNotification() {
+        val stale = if (activeNotificationId() == NOTIFICATION_ID) NOTIFICATION_ID_QUIET
+                    else NOTIFICATION_ID
+        runCatching { getSystemService(NotificationManager::class.java)?.cancel(stale) }
+    }
+
     /** Which channel the foreground notification should post to right now. */
     private fun activeChannelId(): String =
         if (getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("show_notification", true))
@@ -1357,23 +1448,11 @@ class GatewayService : Service() {
             NotifState.WARN -> R.drawable.ic_notif_warning
             NotifState.ERROR -> R.drawable.ic_notif_cross
         }
-        // Listen-in toggle.  It lives on the notification rather than on the
-        // in-call screen because during a real gateway call there is no visible
-        // Activity at all — the service runs headless, and Android 15+ refuses
-        // to let it launch one from the background (BAL_BLOCK).  The
-        // notification is the only UI reachable at that moment.
-        val monitorIntent = Intent(this, GatewayService::class.java).apply {
-            action = ACTION_MONITOR
-        }
-        val monitorPi = PendingIntent.getService(
-            this, 1, monitorIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val monitorAction = Notification.Action.Builder(
-            Icon.createWithResource(this, R.drawable.ic_phone_call),
-            if (monitorOn) "Stop listening" else "Listen in",
-            monitorPi
-        ).build()
+        // No actions.  The notification carries the gateway's status and
+        // nothing else: it is a background service on an unattended handset,
+        // and a button there is one nobody is present to press.  Listen-in is
+        // reached from the app itself.  ACTION_MONITOR still exists and is
+        // still handled, so anything already bound to it keeps working.
 
         return Notification.Builder(this, activeChannelId())
             .setContentTitle(statusText)
@@ -1381,7 +1460,6 @@ class GatewayService : Service() {
             .setContentIntent(pi)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .addAction(monitorAction)
             .build()
             .apply { flags = flags or Notification.FLAG_NO_CLEAR }
     }
@@ -1390,7 +1468,7 @@ class GatewayService : Service() {
         if (statusText != null) notifStatusText = statusText
         notifState = state
         val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification(state))
+        nm.notify(activeNotificationId(), buildNotification(state))
     }
 
     // ── Wake / WiFi locks ───────────────────────────────
@@ -1630,6 +1708,8 @@ class GatewayService : Service() {
         const val CHANNEL_ID = "gateway_channel"
         const val CHANNEL_ID_QUIET = "gateway_channel_quiet"
         const val NOTIFICATION_ID = 1
+        /** Same notification, silent channel — see [activeNotificationId]. */
+        const val NOTIFICATION_ID_QUIET = 2
         const val ACTION_START = "com.callagent.gateway.START"
         const val ACTION_STOP = "com.callagent.gateway.STOP"
         const val ACTION_RELOAD_STATS = "com.callagent.gateway.RELOAD_STATS"
