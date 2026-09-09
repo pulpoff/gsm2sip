@@ -177,7 +177,17 @@ class TlsSipTransport(
         // Without this the handshake is deferred until the first read, so a
         // certificate failure would surface as a mysterious read error on
         // another thread rather than here where it can be reported.
-        s.startHandshake()
+        try {
+            s.startHandshake()
+        } catch (e: java.net.SocketTimeoutException) {
+            // Almost always TLS pointed at a plaintext port: nothing answers
+            // the handshake, so it stalls rather than refusing. Say which port
+            // it was, because the raw message names neither cause nor cure.
+            throw java.io.IOException(
+                "TLS handshake timed out to $host:$port — is $port the TLS port? " +
+                    "(plaintext SIP is usually 5060, TLS 5061)", e
+            )
+        }
         socket = s
         input = s.inputStream
         output = s.outputStream

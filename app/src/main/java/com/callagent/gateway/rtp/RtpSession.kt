@@ -179,6 +179,14 @@ class RtpSession(
     // (when decayingPlaybackRms <= echoGateThreshold) to avoid false resets
     // from incall_music echo leaking back through VOICE_CALL capture.
     private val SILENCE_RMS_THRESHOLD = 10   // Below this = truly dead source (ADC noise floor)
+
+    /** How long to let a source settle before judging its frame rate. */
+    private val RATE_CHECK_AFTER_MS = 4000L
+
+    /** Below this share of the expected 50 frames/s, the source is failing.
+     *  Generous on purpose: a healthy source sits at ~100%, and the case this
+     *  catches measured 70%, so anything near the threshold is unambiguous. */
+    private val RATE_MIN_PERCENT = 85L
     private val SILENCE_FRAME_LIMIT get() = profile.captureSilenceFrames
 
     var listener: Listener? = null
@@ -348,6 +356,17 @@ class RtpSession(
                 configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_DOWNLINK, "VOICE_DOWNLINK@16k", 16000))
             }
             configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_DOWNLINK, "VOICE_DOWNLINK", 8000))
+        }
+
+        // Same preference as the fallback list, applied here too -- this is
+        // the list that picks the source a call actually opens on, and
+        // reordering only the fallback list left every call still starting on
+        // VOICE_CALL@16k and discovering it was dead ~11s later.  The agent
+        // heard silence for those 11 seconds of every call.
+        if (profile.preferVoiceRecognition) {
+            val vr = configs.filter { it.source == MediaRecorder.AudioSource.VOICE_RECOGNITION }
+            configs.removeAll(vr)
+            configs.addAll(0, vr)
         }
 
         var record: AudioRecord? = null
@@ -679,6 +698,14 @@ class RtpSession(
             }
             configs.add(SourceConfig(MediaRecorder.AudioSource.VOICE_DOWNLINK, "VOICE_DOWNLINK", 8000))
         }
+        if (profile.preferVoiceRecognition) {
+            // Ahead of everything, including VOICE_DOWNLINK: on these handsets
+            // it is the source that actually delivers a steady frame rate, and
+            // arriving steadily matters more than arriving digitally.
+            val vr = configs.filter { it.source == MediaRecorder.AudioSource.VOICE_RECOGNITION }
+            configs.removeAll(vr)
+            configs.addAll(0, vr)
+        }
         return configs.filterNot { it.source in silentSourceIds }
     }
 
@@ -872,10 +899,45 @@ class RtpSession(
         var sourceProven = false
         var lastDeadAirLog = 0L
 
+        // Frame-rate watchdog.  The silence detector asks "is this source
+        // delivering audio"; this asks "is it delivering it on time".  A
+        // source can pass the first and fail the second, which is what a
+        // bursty VOICE_CALL does, and only the second failure produces the
+        // gappy uplink that makes an agent talk over itself.
+        val captureStartMs = System.currentTimeMillis()
+        var framesCaptured = 0L
+        var rateChecked = false
+
         while (running.get()) {
             try {
                 val read = record.read(pcmBuf, 0, pcmBuf.size)
                 if (read <= 0) continue
+                framesCaptured++
+
+                // Checked once, on a window early in the call: switching
+                // sources mid-call is disruptive, and a source that is going
+                // to stall does so from the start.  A proven source is still
+                // eligible -- "proven" only means it produced sound, which is
+                // exactly the state this failure hides behind.
+                if (!rateChecked) {
+                    val elapsed = System.currentTimeMillis() - captureStartMs
+                    if (elapsed >= RATE_CHECK_AFTER_MS) {
+                        rateChecked = true
+                        val expected = elapsed / 20                 // 50 frames/s
+                        if (expected > 0 && framesCaptured * 100 / expected < RATE_MIN_PERCENT) {
+                            val pct = framesCaptured * 100 / expected
+                            val msg = "Source $audioSourceName too slow: $framesCaptured/$expected " +
+                                "frames ($pct%) in ${elapsed}ms — trying fallback"
+                            Log.w(TAG, msg)
+                            listener?.onRtpStats(msg)
+                            silentSourceIds.add(currentSourceId)
+                            try { record.stop() } catch (_: Exception) {}
+                            record.release()
+                            audioRecord = null
+                            return false
+                        }
+                    }
+                }
 
                 // Measure raw capture level BEFORE echo gate for diagnostics.
                 // If rawCaptureRms=0, the audio source itself is silent

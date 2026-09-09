@@ -580,7 +580,25 @@ class MainActivity : AppCompatActivity() {
             }
         }
         syncSrtpEnabled()
-        cbTls.setOnCheckedChangeListener { _, _ -> syncSrtpEnabled() }
+        cbTls.setOnCheckedChangeListener { _, checked ->
+            syncSrtpEnabled()
+            // Move the port with the transport, the way every other SIP client
+            // does.  TLS on 5060 does not fail cleanly: the plaintext port
+            // never answers a handshake, so it hangs until "SSL handshake
+            // timed out" -- which reads as a certificate or network fault and
+            // sends you looking in entirely the wrong place.
+            // Only the two well-known defaults are touched; a custom port is
+            // left exactly as typed.
+            val portField = findViewById<EditText>(R.id.etCfgPort)
+            val current = portField.text.toString().trim().toIntOrNull()
+            if (checked && current == 5060) {
+                portField.setText("5061")
+                Toast.makeText(this, "Port switched to 5061 for TLS", Toast.LENGTH_SHORT).show()
+            } else if (!checked && current == 5061) {
+                portField.setText("5060")
+                Toast.makeText(this, "Port switched back to 5060", Toast.LENGTH_SHORT).show()
+            }
+        }
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711

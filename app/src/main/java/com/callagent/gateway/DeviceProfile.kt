@@ -156,6 +156,21 @@ data class DeviceProfile(
      *  pumps the room.  UNPROCESSED bypasses that chain. */
     val preferUnprocessedMic: Boolean = false,
 
+    /** Put VOICE_RECOGNITION at the head of the capture list.
+     *
+     *  For handsets where VOICE_CALL opens and reports a plausible level but
+     *  does not deliver frames at a steady 50/s.  That failure is invisible to
+     *  the silence detector -- there *is* audio, it simply arrives in bursts --
+     *  and the resulting gappy uplink reads to an AI agent's barge-in detector
+     *  as the caller interrupting, so it stops mid-sentence.  Measured on the
+     *  S4 Mini: VOICE_CALL@16k sent 1173 packets where 1676 arrived, while
+     *  VOICE_RECOGNITION on the same call sent 1650 of 1675.
+     *
+     *  The rest of the list is kept as fallback rather than pinning this one
+     *  source: if it ever fails to open, a call with no audio at all is worse
+     *  than a call on a second-choice source. */
+    val preferVoiceRecognition: Boolean = false,
+
     /** Ask AudioRecord to capture from the telephony RX device.
      *
      *  The mirror of [playbackToTelephonyTx].  Without it, capture on a device
@@ -411,6 +426,7 @@ data class DeviceProfile(
         /** Samsung Galaxy S4 Mini (MSM8930 / WCD9304 codec) */
         fun msm8930() = DeviceProfile(
             name = "MSM8930 (S4 Mini)",
+            preferVoiceRecognition = true,
             mixerSetupCmd = buildString {
                 // Voice Rx mute (silence speaker)
                 append("tinymix 'Voice Rx Device Mute' 1 2>/dev/null; ")
