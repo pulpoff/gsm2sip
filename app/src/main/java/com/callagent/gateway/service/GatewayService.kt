@@ -1168,6 +1168,13 @@ class GatewayService : Service() {
             return
         }
 
+        // TLS protects signalling only: REGISTER, INVITE and the SMS bodies
+        // in MESSAGE.  RTP is deliberately left alone, so call audio is no
+        // more or less private than it was on UDP.
+        val useTls = getSharedPreferences("gateway", MODE_PRIVATE)
+            .getBoolean("sip_tls", false)
+        if (useTls) broadcastLog("SIP transport: TLS to $cfgServer:$cfgPort")
+
         val sip = SipClient(
             username = cfgUser,
             password = cfgPass,
@@ -1175,7 +1182,8 @@ class GatewayService : Service() {
             serverPort = cfgPort,
             localIp = localIp,
             localPort = 5060,
-            publicIp = publicIp
+            publicIp = publicIp,
+            useTls = useTls
         )
         sipClient = sip
 

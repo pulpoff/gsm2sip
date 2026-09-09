@@ -27,6 +27,11 @@
     <color name="border_input">#D1D5DB</color>
     <color name="border_card">#E5E7EB</color>
 
+    <!-- TLS badge.  Amber rather than the accent green: the green pill means
+         "registered", and TLS is a different fact about the same connection,
+         so it must not read as a second copy of the same status. -->
+    <color name="tls_badge">#CA8A04</color>
+
     <!-- Status bar -->
     <color name="status_bar">#FFFFFF</color>
 </resources>

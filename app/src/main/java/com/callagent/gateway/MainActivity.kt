@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabHome: View
     private lateinit var tabConfig: View
     private lateinit var tvHomeStatusPill: TextView
+    private lateinit var tvHomeTlsBadge: TextView
     private lateinit var tvNetMobile: TextView
     private lateinit var tvNetWifi: TextView
     private val netHandler = Handler(Looper.getMainLooper())
@@ -329,6 +330,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnCfgSave).setOnClickListener { saveConfigFromView() }
         findViewById<View>(R.id.btnCfgClearRecents).setOnClickListener { confirmClearRecents() }
         tvHomeStatusPill = findViewById(R.id.tvHomeStatusPill)
+        tvHomeTlsBadge = findViewById(R.id.tvHomeTlsBadge)
         tvNetMobile = findViewById(R.id.tvNetMobile)
         tvNetWifi = findViewById(R.id.tvNetWifi)
         homeCallCard = findViewById(R.id.homeCallCard)
@@ -556,6 +558,8 @@ class MainActivity : AppCompatActivity() {
             prefs.getBoolean("use_stun", true)
         findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked =
             prefs.getBoolean("translit_ascii", false)
+        findViewById<CheckBox>(R.id.cbCfgTls).isChecked =
+            prefs.getBoolean("sip_tls", false)
         findViewById<RadioButton>(
             when (prefs.getString("codec", "g722")) {
                 "g711" -> R.id.rbCodecG711
@@ -623,6 +627,7 @@ class MainActivity : AppCompatActivity() {
         val auto = findViewById<CheckBox>(R.id.cbCfgAutoconnect).isChecked
         val useStun = findViewById<CheckBox>(R.id.cbCfgUseStun).isChecked
         val translit = findViewById<CheckBox>(R.id.cbCfgTranslit).isChecked
+        val tls = findViewById<CheckBox>(R.id.cbCfgTls).isChecked
         val agentVolStep = findViewById<SeekBar>(R.id.sbCfgAgentVolume).progress - 3
         val codec = when (findViewById<RadioGroup>(R.id.rgCfgCodec).checkedRadioButtonId) {
             R.id.rbCodecG711 -> "g711"
@@ -648,12 +653,14 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("autoconnect", auto)
             .putBoolean("use_stun", useStun)
             .putBoolean("translit_ascii", translit)
+            .putBoolean("sip_tls", tls)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
             .apply()
         appendLog(
             "Config saved: $user@$server:$port (own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
+                "tls=${if (tls) "on" else "off"}, " +
                 "ascii=${if (translit) "on" else "off"}, " +
                     "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
         )
@@ -703,6 +710,18 @@ class MainActivity : AppCompatActivity() {
         tvHomeStatusPill.setTextColor(
             Color.parseColor(if (online) "#34D399" else "#F87171")
         )
+
+        // The badge says what the signalling is carried over, which is a
+        // property of the configuration rather than of the current state --
+        // so it is shown whenever TLS is switched on, not only while
+        // registered.  It reads from prefs each time because the setting can
+        // change under the Activity while it is alive.
+        tvHomeTlsBadge.visibility =
+            if (getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("sip_tls", false)) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
 
         if (state == "BRIDGED") {
             homeCallCard.visibility = View.VISIBLE

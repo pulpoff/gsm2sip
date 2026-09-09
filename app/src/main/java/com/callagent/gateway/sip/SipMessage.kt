@@ -219,6 +219,21 @@ object SipBuilder {
     @Volatile
     var codecMode: String = "g722"
 
+    /**
+     * Transport token for Via, and the matching Contact parameter.
+     *
+     * Set once when the transport is created.  Via must name the transport the
+     * request actually travelled over or responses are routed back wrongly,
+     * and Contact must carry `transport=tls` so the server sends inbound
+     * requests down the existing TLS connection instead of trying to open a
+     * fresh UDP path to a port that is not listening.
+     */
+    @Volatile
+    var transport: String = "UDP"
+
+    private val contactParam: String
+        get() = if (transport == "TLS") ";transport=tls" else ""
+
     private fun branch(): String = "z9hG4bK${(100000000..999999999).random()}"
     private fun tag(): String = "gw${(100000000..999999999).random()}"
 
@@ -231,14 +246,14 @@ object SipBuilder {
         val uri = "sip:$domain:$serverPort"
         return buildString {
             append("REGISTER $uri SIP/2.0\r\n")
-            append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+            append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
             append("To: <sip:$username@$domain>\r\n")
             append("From: <sip:$username@$localIp>;tag=${tag()}\r\n")
             append("Call-ID: $callId\r\n")
             append("CSeq: $cseq REGISTER\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort>;expires=3600\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$contactParam>;expires=3600\r\n")
             if (auth != null) append(auth)
             append("Content-Length: 0\r\n\r\n")
         }
@@ -260,14 +275,14 @@ object SipBuilder {
         val sdp = buildSdp(localIp, localRtpPort)
         return buildString {
             append("INVITE $targetUri SIP/2.0\r\n")
-            append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+            append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
             append("To: <$targetUri>\r\n")
             append("From: $fromDisplay<sip:$fromUser@$domain>;tag=$fromTag\r\n")
             append("Call-ID: $callId\r\n")
             append("CSeq: $cseq INVITE\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
             if (auth != null) append(auth)
             append("Content-Type: application/sdp\r\n")
             append("Content-Length: ${sdp.length}\r\n\r\n")
@@ -295,7 +310,7 @@ object SipBuilder {
         auth: String? = null
     ): String = buildString {
         append("MESSAGE $targetUri SIP/2.0\r\n")
-        append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
         append("User-Agent: $userAgent\r\n")
         append("To: <$targetUri>\r\n")
@@ -353,7 +368,7 @@ object SipBuilder {
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
             if (sdp != null) {
                 append("Content-Type: application/sdp\r\n")
                 append("Content-Length: ${sdp.length}\r\n\r\n")
@@ -417,14 +432,14 @@ object SipBuilder {
         username: String, localIp: String, localPort: Int
     ): String = buildString {
         append("ACK $targetUri SIP/2.0\r\n")
-        append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
         append("To: $toHeader\r\n")
         append("From: $fromHeader\r\n")
         append("Call-ID: $callId\r\n")
         append("CSeq: $cseq ACK\r\n")
-        append("Contact: <sip:$username@$localIp:$localPort>\r\n")
+        append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
         append("Content-Length: 0\r\n\r\n")
     }
 
@@ -435,14 +450,14 @@ object SipBuilder {
         username: String, localIp: String, localPort: Int
     ): String = buildString {
         append("BYE $targetUri SIP/2.0\r\n")
-        append("Via: SIP/2.0/UDP $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
         append("From: $fromHeader\r\n")
         append("To: $toHeader\r\n")
         append("Call-ID: $callId\r\n")
         append("CSeq: $cseq BYE\r\n")
-        append("Contact: <sip:$username@$localIp:$localPort>\r\n")
+        append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
         append("Content-Length: 0\r\n\r\n")
     }
 
@@ -471,7 +486,7 @@ object SipBuilder {
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
             append("Allow: INVITE, ACK, CANCEL, OPTIONS, BYE\r\n")
             append("Content-Length: 0\r\n\r\n")
         }

@@ -4,6 +4,10 @@
     <color name="background">#111827</color>
     <color name="surface">#1F2937</color>
 
+    <!-- TLS badge, brighter than the light-theme value: the same yellow that
+         is legible on white disappears against the dark card. -->
+    <color name="tls_badge">#FACC15</color>
+
     <!-- Text -->
     <color name="text_primary">#F9FAFB</color>
     <color name="text_label">#D1D5DB</color>

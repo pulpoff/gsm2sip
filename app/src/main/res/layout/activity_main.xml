@@ -56,6 +56,22 @@
                         android:paddingVertical="5dp"
                         android:layout_marginStart="10dp" />
 
+                    <TextView
+                        android:id="@+id/tvHomeTlsBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="TLS"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/tls_badge"
+                        android:background="@drawable/input_bg"
+                        android:drawableStart="@drawable/ic_shield_lock"
+                        android:drawablePadding="4dp"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="5dp"
+                        android:layout_marginStart="6dp"
+                        android:visibility="gone" />
+
                     <View
                         android:layout_width="0dp"
                         android:layout_height="1dp"
@@ -577,6 +593,23 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="Finds the public IP so SIP and RTP survive NAT. Turn off for a SIP server on the local network."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgTls"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Enable TLS"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Encrypts SIP signalling — registration, calls and SMS text. Call audio (RTP) is not encrypted either way. The server must offer TLS, usually on port 5061."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="6dp" />

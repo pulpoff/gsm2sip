@@ -2,10 +2,7 @@ package com.callagent.gateway.sip
 
 import android.os.Build
 import android.util.Log
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -28,11 +25,19 @@ class SipClient(
     var localIp: String = "0.0.0.0",
     val localPort: Int = 5060,
     /** Public IP discovered via STUN — used in Contact headers and SDP for NAT traversal */
-    var publicIp: String = localIp
+    var publicIp: String = localIp,
+    /** SIP over TLS instead of UDP.  Signalling only — RTP is unaffected. */
+    val useTls: Boolean = false
 ) {
     val serverAddress: Pair<String, Int> get() = Pair(serverDomain, serverPort)
 
-    private var socket: DatagramSocket? = null
+    private var transport: SipTransport? = null
+
+    /**
+     * Port to put in Via and Contact.  UDP binds the configured port; TLS is
+     * given an ephemeral one by the OS and has to advertise that instead.
+     */
+    private val advertisedPort: Int get() = transport?.localPort ?: localPort
     /** Pre-resolved server address — avoids DNS on main thread */
     @Volatile private var resolvedServerAddr: InetAddress? = null
     private val cseq = AtomicInteger(1)
@@ -134,21 +139,23 @@ class SipClient(
         activeCalls.clear()
         sendExecutor?.shutdownNow()
         sendExecutor = null
-        socket?.close()
-        socket = null
+        transport?.close()
+        transport = null
         resolvedServerAddr = null
     }
 
     private fun createSocket() {
-        socket?.close()
+        transport?.close()
         sendExecutor?.shutdownNow()
-        val s = DatagramSocket(null)
-        s.reuseAddress = true
-        s.bind(InetSocketAddress(localPort))
-        s.soTimeout = 5000
-        s.receiveBufferSize = 65535
-        s.sendBufferSize = 65535
-        socket = s
+        val t: SipTransport = if (useTls) {
+            TlsSipTransport(serverDomain, serverPort, SOCKET_TIMEOUT_MS) { uiLog(it) }
+        } else {
+            UdpSipTransport(localPort, SOCKET_TIMEOUT_MS)
+        }
+        t.open()
+        transport = t
+        // Via must name the transport the request actually goes out over.
+        SipBuilder.transport = t.viaTransport
         sendExecutor = Executors.newSingleThreadExecutor { r ->
             Thread({
                 // Once for the thread, not once per packet: this was building
@@ -159,9 +166,14 @@ class SipClient(
                 r.run()
             }, "SIP-Send")
         }
-        // Resolve server DNS now (background thread) so sendTo never blocks on DNS
-        resolvedServerAddr = InetAddress.getByName(serverDomain)
-        uiLog("Socket bound to $localIp:$localPort")
+        // Resolve server DNS now (background thread) so sendTo never blocks on
+        // DNS.  TLS resolved the name when it connected and writes to an open
+        // socket, so it needs no address cache.
+        resolvedServerAddr = if (useTls) null else InetAddress.getByName(serverDomain)
+        uiLog(
+            if (useTls) "TLS session up to $serverDomain:$serverPort (local port $advertisedPort)"
+            else "Socket bound to $localIp:$localPort"
+        )
     }
 
     // ── Send ────────────────────────────────────────────
@@ -183,19 +195,14 @@ class SipClient(
 
     private fun doSend(data: String, address: Pair<String, Int>) {
         try {
-            // Explicit, not the platform default.  It happens to be UTF-8 on
-            // Android, so this changes nothing today -- but SIP bodies carry
-            // the message text, and an implicit charset is the one thing that
-            // would silently turn every umlaut into mojibake.
-            val bytes = data.toByteArray(Charsets.UTF_8)
-            // Use cached address for server to avoid DNS on main thread
-            val addr = if (address.first == serverDomain) {
-                resolvedServerAddr ?: InetAddress.getByName(address.first)
+            val t = transport ?: return
+            // Use the cached address for the server so this never does DNS.
+            val cached = resolvedServerAddr
+            if (t is UdpSipTransport && cached != null && address.first == serverDomain) {
+                t.send(data, cached, address.second)
             } else {
-                InetAddress.getByName(address.first)
+                t.send(data, address.first, address.second)
             }
-            val packet = DatagramPacket(bytes, bytes.size, addr, address.second)
-            socket?.send(packet)
         } catch (e: Exception) {
             uiLog("Send error to ${address.first}:${address.second} [thread=${Thread.currentThread().name}]: ${e.javaClass.simpleName}: ${e.message}")
         }
@@ -206,19 +213,23 @@ class SipClient(
     // ── Receive Loop ────────────────────────────────────
 
     private fun receiveLoop() {
-        val buf = ByteArray(4096)
         while (running.get()) {
             try {
-                val s = socket ?: break
-                val packet = DatagramPacket(buf, buf.size)
-                s.receive(packet)
-                val data = String(packet.data, 0, packet.length, Charsets.UTF_8)
-                val address = Pair(packet.address.hostAddress ?: "", packet.port)
+                val t = transport ?: break
+                val (data, address) = t.receive() ?: continue
                 handlePacket(data, address)
             } catch (_: SocketTimeoutException) {
                 // normal
             } catch (e: Exception) {
-                if (running.get()) uiLog("Receive error: ${e.message}")
+                if (!running.get()) break
+                uiLog("Receive error: ${e.message}")
+                // A datagram socket survives a bad packet; a dropped stream
+                // does not, and would spin here throwing the same error
+                // forever.  Tear it down and let the monitor loop rebuild it.
+                if (useTls) {
+                    registered = false
+                    transport?.close()
+                }
             }
         }
     }
@@ -228,7 +239,7 @@ class SipClient(
 
         // OPTIONS keepalive from server
         if (msg.isRequest && msg.method == "OPTIONS") {
-            val resp = SipBuilder.optionsResponse(msg, username, publicIp, localPort)
+            val resp = SipBuilder.optionsResponse(msg, username, publicIp, advertisedPort)
             sendTo(resp, address)
             return
         }
@@ -321,7 +332,7 @@ class SipClient(
                 activeCalls.remove(callId)
             }
             // Send 200 OK even for unknown BYE
-            val ok = SipBuilder.ok200(msg, username, publicIp, localPort)
+            val ok = SipBuilder.ok200(msg, username, publicIp, advertisedPort)
             sendTo(ok, address)
             return
         }
@@ -394,7 +405,7 @@ class SipClient(
     private fun sendRegister(auth: String? = null) {
         val msg = SipBuilder.register(
             username, serverDomain, serverPort,
-            publicIp, localPort,
+            publicIp, advertisedPort,
             callIdBase, cseq.getAndIncrement(),
             auth
         )
@@ -489,7 +500,7 @@ class SipClient(
         val targetUri = "sip:$targetExtension@$serverDomain"
         val invite = SipBuilder.invite(
             targetUri, username, serverDomain,
-            publicIp, localPort,
+            publicIp, advertisedPort,
             callId, call.localCseq++,
             localRtpPort,
             fromTag = call.localTag,
@@ -574,7 +585,7 @@ class SipClient(
             var cseq = 1
             sendTo(
                 SipBuilder.message(
-                    targetUri, fromUser, serverDomain, publicIp, localPort,
+                    targetUri, fromUser, serverDomain, publicIp, advertisedPort,
                     callId, cseq, body, contentType, extraHeaders, fromTag
                 ),
                 serverAddress
@@ -593,7 +604,7 @@ class SipClient(
                 )
                 sendTo(
                     SipBuilder.message(
-                        targetUri, fromUser, serverDomain, publicIp, localPort,
+                        targetUri, fromUser, serverDomain, publicIp, advertisedPort,
                         callId, cseq, body, contentType, extraHeaders, fromTag, auth
                     ),
                     serverAddress
@@ -634,7 +645,7 @@ class SipClient(
         val auth = SipAuth.buildInviteAuthHeader(targetUri, username, password, authParams)
         val invite = SipBuilder.invite(
             targetUri, username, serverDomain,
-            publicIp, localPort,
+            publicIp, advertisedPort,
             call.callId, call.localCseq++,
             call.localRtpPort,
             fromTag = call.localTag,
@@ -667,6 +678,16 @@ class SipClient(
         while (running.get()) {
             try {
                 if (!registered) {
+                    // A dropped TLS connection has to be rebuilt before any
+                    // REGISTER can go anywhere.  UDP has nothing to reconnect,
+                    // so this is skipped there entirely.
+                    if (useTls && transport?.isOpen != true) {
+                        try {
+                            createSocket()
+                        } catch (e: Exception) {
+                            uiLog("TLS reconnect failed: ${e.message}")
+                        }
+                    }
                     // register() rate-limits itself — while the cooldown is
                     // running it returns without sending anything, so polling
                     // once per loop costs no traffic.
@@ -688,10 +709,15 @@ class SipClient(
                     // nor logs it.  Timed on its own clock rather than once per
                     // iteration, so the loop can poll faster than the binding
                     // needs packets.
-                    val now = System.currentTimeMillis()
-                    if (now - lastKeepaliveTime >= NAT_KEEPALIVE_INTERVAL_MS) {
-                        sendNatKeepalive()
-                        lastKeepaliveTime = now
+                    // TLS needs none of this: the mapping is held open by the
+                    // TCP connection itself, and the server's 60s OPTIONS keep
+                    // traffic flowing both ways regardless.
+                    if (!useTls) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastKeepaliveTime >= NAT_KEEPALIVE_INTERVAL_MS) {
+                            sendNatKeepalive()
+                            lastKeepaliveTime = now
+                        }
                     }
 
                     // The registration refresh is the only SIP request this
@@ -803,6 +829,9 @@ class SipClient(
          * only a couple of timestamp comparisons; it sends nothing on its own.
          */
         private const val POLL_INTERVAL_MS = 5_000L
+
+        /** Read timeout, so both loops notice stop() promptly. */
+        private const val SOCKET_TIMEOUT_MS = 5_000
 
         /**
          * Exponential backoff for REGISTER, shared by every SipClient.
