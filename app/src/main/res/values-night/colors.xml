@@ -8,6 +8,9 @@
          is legible on white disappears against the dark card. -->
     <color name="tls_badge">#FACC15</color>
 
+    <!-- Lighter blue: #2563EB is close to unreadable on the dark card. -->
+    <color name="srtp_badge">#60A5FA</color>
+
     <!-- Text -->
     <color name="text_primary">#F9FAFB</color>
     <color name="text_label">#D1D5DB</color>

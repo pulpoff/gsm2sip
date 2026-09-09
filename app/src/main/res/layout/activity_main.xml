@@ -72,6 +72,22 @@
                         android:layout_marginStart="6dp"
                         android:visibility="gone" />
 
+                    <TextView
+                        android:id="@+id/tvHomeSrtpBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="SRTP"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/srtp_badge"
+                        android:background="@drawable/input_bg"
+                        android:drawableStart="@drawable/ic_fa_key"
+                        android:drawablePadding="4dp"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="5dp"
+                        android:layout_marginStart="6dp"
+                        android:visibility="gone" />
+
                     <View
                         android:layout_width="0dp"
                         android:layout_height="1dp"

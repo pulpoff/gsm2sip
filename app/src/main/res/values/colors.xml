@@ -32,6 +32,11 @@
          so it must not read as a second copy of the same status. -->
     <color name="tls_badge">#CA8A04</color>
 
+    <!-- SRTP badge.  Blue, distinct from the TLS yellow: the two protect
+         different things (signalling vs audio) and can be on independently,
+         so they must not read as one status in two shades. -->
+    <color name="srtp_badge">#2563EB</color>
+
     <!-- Status bar -->
     <color name="status_bar">#FFFFFF</color>
 </resources>

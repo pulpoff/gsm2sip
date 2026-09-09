@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabConfig: View
     private lateinit var tvHomeStatusPill: TextView
     private lateinit var tvHomeTlsBadge: TextView
+    private lateinit var tvHomeSrtpBadge: TextView
     private lateinit var tvNetMobile: TextView
     private lateinit var tvNetWifi: TextView
     private val netHandler = Handler(Looper.getMainLooper())
@@ -331,6 +332,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnCfgClearRecents).setOnClickListener { confirmClearRecents() }
         tvHomeStatusPill = findViewById(R.id.tvHomeStatusPill)
         tvHomeTlsBadge = findViewById(R.id.tvHomeTlsBadge)
+        tvHomeSrtpBadge = findViewById(R.id.tvHomeSrtpBadge)
         tvNetMobile = findViewById(R.id.tvNetMobile)
         tvNetWifi = findViewById(R.id.tvNetWifi)
         homeCallCard = findViewById(R.id.homeCallCard)
@@ -740,12 +742,16 @@ class MainActivity : AppCompatActivity() {
         // so it is shown whenever TLS is switched on, not only while
         // registered.  It reads from prefs each time because the setting can
         // change under the Activity while it is alive.
-        tvHomeTlsBadge.visibility =
-            if (getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("sip_tls", false)) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
+        val cfg = getSharedPreferences("gateway", MODE_PRIVATE)
+        val tlsOn = cfg.getBoolean("sip_tls", false)
+        tvHomeTlsBadge.visibility = if (tlsOn) View.VISIBLE else View.GONE
+
+        // Shown only when SRTP can actually apply.  The setting is stored
+        // independently of TLS so it survives toggling the transport, but a
+        // badge claiming encrypted audio on a UDP gateway would be a lie --
+        // the same AND the SIP client enforces.
+        tvHomeSrtpBadge.visibility =
+            if (tlsOn && cfg.getBoolean("srtp_enabled", false)) View.VISIBLE else View.GONE
 
         if (state == "BRIDGED") {
             homeCallCard.visibility = View.VISIBLE
