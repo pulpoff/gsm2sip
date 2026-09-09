@@ -22,6 +22,14 @@ import java.text.Normalizer
  * but Android chooses the encoding itself and offers no way to ask, precisely
  * because these characters *are* representable in GSM7, and it costs 70
  * characters per part instead of 160.
+ *
+ * Which is also why this stops where GSM7 does.  A script that has no place
+ * in the 7-bit alphabet at all -- Cyrillic, Hebrew, Arabic, Greek, CJK --
+ * already forces Android to UCS-2 on its own, and UCS-2 is not affected by
+ * the mis-decode: it never touches the table that gets read wrong.  Such text
+ * is therefore left exactly as it came in.  See [toAsciiOrNull], which is what
+ * callers working around the modem should use; [toAscii] folds unconditionally
+ * and will spell an entire Russian message as '?'.
  */
 object Transliterate {
 
@@ -65,17 +73,44 @@ object Transliterate {
      */
     fun toAscii(text: String): String {
         if (isPlainAscii(text)) return text
-        var s = text
-        for ((from, to) in explicit) s = s.replace(from, to)
-        // Everything else that is merely accented: decompose and drop the
-        // combining marks, so é becomes e rather than '?'.
-        s = Normalizer.normalize(s, Normalizer.Form.NFD).replace(COMBINING, "")
+        val s = fold(text)
         return buildString(s.length) {
-            for (c in s) {
-                append(if (c.code in 32..126 || c == '\n' || c == '\r' || c == '\t') c else '?')
-            }
+            for (c in s) append(if (sendable(c)) c else '?')
         }
     }
+
+    /**
+     * ASCII rendering of [text], or null when some of it has no ASCII
+     * spelling at all.
+     *
+     * Null is the answer that matters.  The mis-decode this class exists for
+     * can only happen to a message the modem encodes as GSM 7-bit, and a
+     * single unspellable character forces the whole message to UCS-2 instead
+     * — where every code point travels as itself and nothing is read against
+     * the wrong table.  So text this cannot fold is text that was never at
+     * risk, and folding it anyway would replace a message that would have
+     * arrived intact with a row of '?'.  Cyrillic, Hebrew, Arabic, Greek and
+     * CJK all land here, as does anything mixing them with Latin.
+     */
+    fun toAsciiOrNull(text: String): String? {
+        if (isPlainAscii(text)) return text
+        val s = fold(text)
+        return if (s.all { sendable(it) }) s else null
+    }
+
+    /**
+     * Explicit spellings first, then decomposition for anything merely
+     * accented, so é becomes e.  Whatever is still not ASCII afterwards has
+     * no ASCII spelling; the callers differ only in what they do about that.
+     */
+    private fun fold(text: String): String {
+        var s = text
+        for ((from, to) in explicit) s = s.replace(from, to)
+        return Normalizer.normalize(s, Normalizer.Form.NFD).replace(COMBINING, "")
+    }
+
+    private fun sendable(c: Char): Boolean =
+        c.code in 32..126 || c == '\n' || c == '\r' || c == '\t'
 
     private val COMBINING = Regex("\\p{Mn}+")
 }

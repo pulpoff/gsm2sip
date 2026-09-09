@@ -593,7 +593,7 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Rewrites accents before sending: für becomes fuer. Turn on if umlauts arrive mangled."
+                            android:text="Rewrites accents before sending: für becomes fuer. Turn on if umlauts arrive mangled. Cyrillic, Hebrew, Arabic and other non-Latin text is never rewritten — it is sent as-is."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="6dp" />

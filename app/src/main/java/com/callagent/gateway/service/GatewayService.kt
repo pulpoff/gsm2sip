@@ -609,16 +609,22 @@ class GatewayService : Service() {
         // Reduce to ASCII before anything measures or stores the text, so the
         // part count, the encoding and the log all describe what actually
         // goes out rather than what the server sent.
+        //
+        // Only where that is possible, though: text in a script the 7-bit
+        // alphabet does not have goes out as UCS-2 whatever we do, and UCS-2
+        // is not what the modem mis-decodes.  Folding it would turn a Russian,
+        // Hebrew or Arabic message that would have arrived intact into a row
+        // of '?', so it is sent through unchanged even with the setting on.
         val rawText = msg.body
-        val text = if (getSharedPreferences("gateway", MODE_PRIVATE)
-                .getBoolean("translit_ascii", false)
-        ) {
-            com.callagent.gateway.sms.Transliterate.toAscii(rawText)
-        } else {
-            rawText
-        }
-        if (text != rawText) {
+        val foldToAscii = getSharedPreferences("gateway", MODE_PRIVATE)
+            .getBoolean("translit_ascii", false)
+        val folded =
+            if (foldToAscii) com.callagent.gateway.sms.Transliterate.toAsciiOrNull(rawText) else null
+        val text = folded ?: rawText
+        if (folded != null && folded != rawText) {
             broadcastLog("SMS send: transliterated to ASCII (${rawText.length} -> ${text.length} chars)")
+        } else if (foldToAscii && folded == null) {
+            broadcastLog("SMS send: no ASCII spelling for this text — sending it unchanged as UCS-2")
         }
         if (target.isEmpty() || text.isEmpty()) {
             broadcastLog("SMS send refused: missing recipient or body")
