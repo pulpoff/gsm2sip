@@ -516,8 +516,49 @@ object SipBuilder {
         append("Content-Length: 0\r\n\r\n")
     }
 
-    fun optionsResponse(msg: SipMessage, username: String, localIp: String, localPort: Int): String =
-        buildString {
+    /**
+     * 200 to an OPTIONS: both a liveness answer and a capability dump.
+     *
+     * The server qualifies every registered peer with OPTIONS and stores what
+     * comes back, so this is the only place it learns what this gateway can
+     * do.  Answering with a bare Allow line left it with nothing to store.
+     *
+     * Everything advertised here is something this build actually implements.
+     * There is no Supported: header because this stack supports none of the
+     * extensions worth naming -- no 100rel, no replaces, no UPDATE -- and
+     * claiming them invites requests it would have to reject mid-call, which
+     * is worse than admitting the gap.  The Allow list is likewise the real
+     * set of handled methods, not the conventional long one.
+     */
+    fun optionsResponse(msg: SipMessage, username: String, localIp: String, localPort: Int): String {
+        // A capability description, not an offer: no port is reserved and no
+        // crypto line appears.  SRTP keys are per-call and generated when the
+        // call is set up -- putting one here would publish a key outside any
+        // dialog that used it.  This is also what a FRITZ!Box reports, which
+        // likewise answers OPTIONS with plain AVP while doing SDES on calls.
+        val payloads = when (codecMode) {
+            "g711" -> "8 0 101"
+            "both" -> "9 8 0 101"
+            else -> "9 101"
+        }
+        val sdp = buildString {
+            append("v=0\r\n")
+            append("o=gateway 0 0 IN IP4 $localIp\r\n")
+            append("s=SIP Gateway capabilities\r\n")
+            append("c=IN IP4 $localIp\r\n")
+            append("t=0 0\r\n")
+            append("m=audio 0 RTP/AVP $payloads\r\n")
+            if (codecMode != "g711") append("a=rtpmap:9 G722/8000\r\n")
+            if (codecMode != "g722") {
+                append("a=rtpmap:8 PCMA/8000\r\n")
+                append("a=rtpmap:0 PCMU/8000\r\n")
+            }
+            append("a=rtpmap:101 telephone-event/8000\r\n")
+            append("a=fmtp:101 0-16\r\n")
+            append("a=ptime:20\r\n")
+            append("a=sendrecv\r\n")
+        }
+        return buildString {
             append("SIP/2.0 200 OK\r\n")
             append("Via: ${msg.via}\r\n")
             append("To: ${msg.to}\r\n")
@@ -525,9 +566,18 @@ object SipBuilder {
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
             append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
-            append("Allow: INVITE, ACK, CANCEL, OPTIONS, BYE\r\n")
-            append("Content-Length: 0\r\n\r\n")
+            append("User-Agent: $userAgent\r\n")
+            // The real set: CANCEL and MESSAGE included because inbound ones
+            // are handled; nothing here is aspirational.
+            append("Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, MESSAGE\r\n")
+            // text/plain because inbound MESSAGE carries SMS bodies.
+            append("Accept: application/sdp, text/plain\r\n")
+            append("Accept-Encoding: identity\r\n")
+            append("Content-Type: application/sdp\r\n")
+            append("Content-Length: ${sdp.toByteArray(Charsets.UTF_8).size}\r\n\r\n")
+            append(sdp)
         }
+    }
 
     /**
      * @param srtp keying material for this call, or null for plain RTP.  It is
