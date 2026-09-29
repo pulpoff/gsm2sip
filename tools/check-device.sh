@@ -34,14 +34,20 @@ echo "  android  : $(sh_ getprop ro.build.version.release)"
 echo "  vendor   : $(sh_ getprop ro.vendor.build.fingerprint)"
 echo
 
-if [ "$(sh_ getprop ro.hardware)" != "qcom" ]; then
+HW=$(sh_ getprop ro.hardware)
+BOARD=$(sh_ getprop ro.board.platform)
+case "$HW:$BOARD" in
+    qcom:*|qualcomm:*|*:sm6150|*:sm7150|*:sm[5678]*)
+        ;;
+    *)
     echo "Not a Qualcomm device — stop here."
     echo "Injection needs incall_music and capture needs the in-call record"
     echo "session; neither exists outside the Qualcomm audio HAL.  A Samsung"
     echo "Exynos S10e was checked and has no telephony route in its audio"
     echo "policy at all: three mixPorts (deep, fast, primary) and nothing else."
     exit 1
-fi
+        ;;
+esac
 
 if sh_ 'pm list features' | grep -q 'feature:android.hardware.telephony'; then
     ok "telephony hardware present"

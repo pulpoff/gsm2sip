@@ -389,7 +389,9 @@ data class DeviceProfile(
             val hw = Build.HARDWARE.lowercase()
             val board = Build.BOARD.lowercase()
             val model = Build.MODEL.lowercase()
-            Log.i(TAG, "Detecting device: hw=$hw board=$board model=${Build.MODEL} device=${Build.DEVICE}")
+            val device = Build.DEVICE.lowercase()
+            val product = Build.PRODUCT.lowercase()
+            Log.i(TAG, "Detecting device: hw=$hw board=$board model=${Build.MODEL} device=${Build.DEVICE} product=${Build.PRODUCT}")
 
             return when {
                 // Samsung Galaxy S4 Mini (MSM8930 / WCD9304)
@@ -403,7 +405,15 @@ data class DeviceProfile(
                 // Snapdragon 7-series (SM6150/SM7150) with WCD9375 codec —
                 // e.g. Poco X3 NFC.  Same incall_music path as MSM8930 but a
                 // different codec, so the WCD9304 control names do not apply.
-                board.contains("sm6150") || board.contains("sm7150") ->
+                // Pixel 4a (sunfish) reports the Qualcomm platform as
+                // ro.board.platform=sm6150, but Build.BOARD is usually
+                // "sunfish".  Match the device identity too; otherwise it
+                // falls through to Generic Qualcomm and leaves the handset
+                // microphone in the GSM uplink instead of using the digital
+                // incall_music/Telephony-Tx path.
+                board.contains("sm6150") || board.contains("sm7150") ||
+                    device == "sunfish" || product.contains("sunfish") ||
+                    model.contains("pixel 4a") ->
                     sm6150()
 
                 // Generic Qualcomm — try incall_music, skip WCD9304-specific controls
