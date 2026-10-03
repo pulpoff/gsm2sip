@@ -24,6 +24,12 @@ class SipCall(
     /** Set when any SIP response is received — stops INVITE retransmission (Timer A) */
     @Volatile var responseReceived = false
 
+    /** Final error status (>= 300) that ended this call, or 0 if none was received
+     *  (timeout, transport failure).  Lets the orchestrator tell a deliberate
+     *  rejection (486/603...) from a transient failure worth retrying. */
+    @Volatile var finalStatus: Int = 0
+        private set
+
     // Dialog identifiers
     var localTag: String = "gw${(100000000..999999999).random()}"
     var remoteTag: String? = null
@@ -257,6 +263,7 @@ class SipCall(
                     return true
                 }
                 sipClient.logListener?.invoke("INVITE rejected: ${msg.statusCode} (call $callId)")
+                finalStatus = msg.statusCode ?: 0
                 state = State.TERMINATED
                 listener?.onCallTerminated(this)
                 return true
