@@ -49,6 +49,8 @@ class SipCall(
     var remoteRtpPort: Int = 0
     var remoteRtpAddress: String? = null
     var negotiatedPayloadType: Int = 9 // default G.722, updated from SDP
+    /** The peer's RFC 4733 payload type, from its SDP; 101 if it named none. */
+    var telephoneEventPt: Int = com.callagent.gateway.rtp.RtpPacket.PT_TELEPHONE_EVENT
 
     // ── SRTP (RFC 3711 / RFC 4568) ──────────────────────
     // Two independent keys, one per direction: ours protects what we send,
@@ -104,6 +106,8 @@ class SipCall(
         fun onCallAnswered(call: SipCall)
         fun onCallTerminated(call: SipCall)
         fun onRtpReady(call: SipCall, remoteRtpAddr: String, remoteRtpPort: Int, payloadType: Int)
+        /** A key press that arrived as SIP INFO rather than RTP. */
+        fun onDtmf(call: SipCall, digit: Char, durationMs: Int) {}
     }
 
     /** Process incoming SIP message for this dialog */
@@ -121,6 +125,7 @@ class SipCall(
                 msg.sdpRtpPort?.let { remoteRtpPort = it }
                 msg.sdpAddress?.let { remoteRtpAddress = it }
                 negotiatedPayloadType = msg.sdpPreferredPayloadType
+                msg.sdpTelephoneEventPt?.let { telephoneEventPt = it }
 
                 // We offered SRTP; this is where we find out whether they took
                 // it.  If they did not, our key is dropped so the media path
@@ -262,6 +267,52 @@ class SipCall(
                 return true
             }
 
+            // ── In-dialog requests from the server ──────────────────
+            // None of these used to get an answer.  An unanswered INFO is
+            // retransmitted for 32s; an unanswered re-INVITE or UPDATE — a
+            // session-timer refresh, typically ~15 minutes in — makes the
+            // server tear the call down.  So long calls dropped.
+
+            // DTMF as SIP INFO (application/dtmf-relay or application/dtmf).
+            msg.isRequest && msg.method == "INFO" -> {
+                sipClient.sendResponse(
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    remoteContactAddress ?: sipClient.serverAddress
+                )
+                val digit = com.callagent.gateway.rtp.SipInfoDtmf.parse(msg.contentType, msg.body)
+                if (digit != null) {
+                    Log.i(TAG, "INFO DTMF '${digit.char}' (${digit.durationMs}ms) for call $callId")
+                    listener?.onDtmf(this, digit.char, digit.durationMs)
+                } else {
+                    Log.d(TAG, "INFO without DTMF for call $callId (${msg.contentType})")
+                }
+                return true
+            }
+
+            // Re-INVITE (session refresh, hold, codec change) on an answered
+            // dialog.  A To-tag is what tells it apart from a retransmission of
+            // the initial INVITE, which must not be answered from here.
+            msg.isRequest && msg.method == "INVITE" && state == State.ANSWERED &&
+                msg.to?.contains(";tag=") == true -> {
+                answerInDialogOffer(msg, "re-INVITE")
+                return true
+            }
+
+            // UPDATE (RFC 3311) — session timers again, sometimes with SDP.
+            msg.isRequest && msg.method == "UPDATE" -> {
+                answerInDialogOffer(msg, "UPDATE")
+                return true
+            }
+
+            // In-dialog OPTIONS (some servers probe established calls).
+            msg.isRequest && msg.method == "OPTIONS" -> {
+                sipClient.sendResponse(
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    remoteContactAddress ?: sipClient.serverAddress
+                )
+                return true
+            }
+
             // ACK (for our 200 OK)
             msg.isRequest && msg.method == "ACK" -> {
                 Log.d(TAG, "Received ACK for call $callId")
@@ -273,6 +324,41 @@ class SipCall(
                 return false
             }
         }
+    }
+
+    /**
+     * Answer an in-dialog offer (re-INVITE or UPDATE) with 200 OK.
+     *
+     * The media session is not renegotiated: the answer repeats our existing
+     * port, codec offer and SRTP key, which is what a refresh expects.  If the
+     * peer moved its media, that is logged — symmetric RTP keeps sending to
+     * the address the first packets came from, so configure the server not to
+     * re-route media mid-call (Asterisk: direct_media=no).
+     */
+    private fun answerInDialogOffer(msg: SipMessage, what: String) {
+        val hasSdp = msg.body.contains("m=audio")
+        if (hasSdp) {
+            val newAddr = msg.sdpAddress
+            val newPort = msg.sdpRtpPort
+            if ((newAddr != null && newAddr != remoteRtpAddress) ||
+                (newPort != null && newPort != remoteRtpPort)) {
+                Log.w(TAG, "$what moves media to $newAddr:$newPort (was " +
+                        "$remoteRtpAddress:$remoteRtpPort) — not followed; set direct_media=no")
+                sipClient.logListener?.invoke("$what tried to move media — set direct_media=no on the server")
+            }
+            msg.sdpTelephoneEventPt?.let { telephoneEventPt = it }
+        }
+        val ok = SipBuilder.ok200(
+            msg, sipClient.username, sipClient.publicIp, sipClient.localPort,
+            // A re-INVITE without SDP is a delayed offer: the 200 OK must
+            // carry one.  An UPDATE without SDP is answered without.
+            localRtpPort = if ((hasSdp || msg.method == "INVITE") && localRtpPort > 0) localRtpPort else null,
+            toTag = localTag,
+            srtp = if (srtpActive) localSrtpKeys else null,
+            srtpTag = srtpTag
+        )
+        sipClient.sendResponse(ok, remoteContactAddress ?: sipClient.serverAddress)
+        Log.i(TAG, "Answered $what for call $callId (sdp=$hasSdp)")
     }
 
     /** Accept an inbound INVITE: send 200 OK with SDP */

@@ -56,10 +56,29 @@ class RtpPacket(
             val ts = buf.int.toLong() and 0xFFFFFFFFL
             val ssrc = buf.int.toLong() and 0xFFFFFFFFL
 
-            val headerSize = 12 + csrcCount * 4
+            var headerSize = 12 + csrcCount * 4
             if (length < headerSize) return null
 
-            val payload = ByteArray(length - headerSize)
+            // Header extension (X bit): 4-byte header + N 32-bit words.  Not
+            // skipping it hands the extension to the decoder as audio — or, for
+            // telephone-event, as a bogus key.
+            if ((b0 and 0x10) != 0) {
+                if (length < headerSize + 4) return null
+                val words = ((data[headerSize + 2].toInt() and 0xFF) shl 8) or
+                        (data[headerSize + 3].toInt() and 0xFF)
+                headerSize += 4 + words * 4
+                if (length < headerSize) return null
+            }
+
+            // Padding (P bit): the last byte says how many bytes to drop.
+            var end = length
+            if ((b0 and 0x20) != 0) {
+                val pad = data[length - 1].toInt() and 0xFF
+                if (pad == 0 || length - pad < headerSize) return null
+                end = length - pad
+            }
+
+            val payload = ByteArray(end - headerSize)
             System.arraycopy(data, headerSize, payload, 0, payload.size)
 
             return RtpPacket(pt, seq, ts, ssrc, payload, marker)
@@ -69,5 +88,7 @@ class RtpPacket(
         const val PT_PCMU = 0
         const val PT_G722 = 9
         const val PT_PCMA = 8
+        /** What this gateway offers for telephone-event in its own SDP. */
+        const val PT_TELEPHONE_EVENT = 101
     }
 }
