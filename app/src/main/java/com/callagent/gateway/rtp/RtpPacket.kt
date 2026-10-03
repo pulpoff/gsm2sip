@@ -60,7 +60,8 @@ class RtpPacket(
             if (length < headerSize) return null
 
             // Header extension (X bit): 4-byte header + N 32-bit words.  Not
-            // skipping it hands the extension to the decoder as audio.
+            // skipping it hands the extension to the decoder as audio — or, for
+            // telephone-event, as a bogus key.
             if ((b0 and 0x10) != 0) {
                 if (length < headerSize + 4) return null
                 val words = ((data[headerSize + 2].toInt() and 0xFF) shl 8) or
@@ -87,5 +88,7 @@ class RtpPacket(
         const val PT_PCMU = 0
         const val PT_G722 = 9
         const val PT_PCMA = 8
+        /** What this gateway offers for telephone-event in its own SDP. */
+        const val PT_TELEPHONE_EVENT = 101
     }
 }

@@ -14,6 +14,7 @@ import com.callagent.gateway.gsm.GsmCallManager
 import com.callagent.gateway.rtp.RtpPacket
 import com.callagent.gateway.rtp.SrtpContext
 import com.callagent.gateway.rtp.RtpSession
+import com.callagent.gateway.rtp.DtmfDetector
 import com.callagent.gateway.sip.SipCall
 import com.callagent.gateway.sip.SipClient
 import java.net.DatagramSocket
@@ -757,6 +758,14 @@ class CallOrchestrator(
 
     // onCallTerminated is already implemented above (shared by SipClient.Listener and SipCall.Listener)
 
+    override fun onDtmf(call: SipCall, digit: Char, durationMs: Int) {
+        if (call !== activeSipCall) {
+            Log.w(TAG, "INFO DTMF '$digit' for a call that is not bridged — ignored")
+            return
+        }
+        GsmCallManager.dtmfRelay.pulse(digit, durationMs)
+    }
+
     override fun onRtpReady(call: SipCall, remoteRtpAddr: String, remoteRtpPort: Int, payloadType: Int) {
         val codecName = when (payloadType) {
             RtpPacket.PT_G722 -> "G.722"
@@ -908,6 +917,15 @@ class CallOrchestrator(
         }
         val session = RtpSession(context, localPort, remoteAddr, remotePort, payloadType)
 
+        // DTMF from the SIP side → the GSM call, so IVR menus work.  Accept
+        // the payload type the server named in its SDP as well as our own 101.
+        val dtmfPt = activeSipCall?.telephoneEventPt ?: RtpPacket.PT_TELEPHONE_EVENT
+        session.telephoneEventPts = setOf(dtmfPt, RtpPacket.PT_TELEPHONE_EVENT)
+        session.dtmfDetector = DtmfDetector(
+            onBegin = { digit -> GsmCallManager.dtmfRelay.begin(digit) },
+            onEnd = { digit, _ -> GsmCallManager.dtmfRelay.end(digit) }
+        )
+
         // Attach the negotiated SRTP keys, if this call has any.  Done before
         // start() so no packet is ever sent or accepted unprotected on a call
         // that agreed to be protected.
@@ -978,6 +996,7 @@ class CallOrchestrator(
         gsmStateWatchdog = null
         diallerInitiated = false
         Log.i(TAG, "Tearing down bridge: $reason")
+        GsmCallManager.dtmfRelay.cancel()
 
         try {
             activeRtpSession?.let {

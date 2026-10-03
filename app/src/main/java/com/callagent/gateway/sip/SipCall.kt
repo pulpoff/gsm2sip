@@ -49,6 +49,8 @@ class SipCall(
     var remoteRtpPort: Int = 0
     var remoteRtpAddress: String? = null
     var negotiatedPayloadType: Int = 9 // default G.722, updated from SDP
+    /** The peer's RFC 4733 payload type, from its SDP; 101 if it named none. */
+    var telephoneEventPt: Int = com.callagent.gateway.rtp.RtpPacket.PT_TELEPHONE_EVENT
 
     // ── SRTP (RFC 3711 / RFC 4568) ──────────────────────
     // Two independent keys, one per direction: ours protects what we send,
@@ -104,6 +106,8 @@ class SipCall(
         fun onCallAnswered(call: SipCall)
         fun onCallTerminated(call: SipCall)
         fun onRtpReady(call: SipCall, remoteRtpAddr: String, remoteRtpPort: Int, payloadType: Int)
+        /** A key press that arrived as SIP INFO rather than RTP. */
+        fun onDtmf(call: SipCall, digit: Char, durationMs: Int) {}
     }
 
     /** Process incoming SIP message for this dialog */
@@ -121,6 +125,7 @@ class SipCall(
                 msg.sdpRtpPort?.let { remoteRtpPort = it }
                 msg.sdpAddress?.let { remoteRtpAddress = it }
                 negotiatedPayloadType = msg.sdpPreferredPayloadType
+                msg.sdpTelephoneEventPt?.let { telephoneEventPt = it }
 
                 // We offered SRTP; this is where we find out whether they took
                 // it.  If they did not, our key is dropped so the media path
@@ -268,13 +273,19 @@ class SipCall(
             // session-timer refresh, typically ~15 minutes in — makes the
             // server tear the call down.  So long calls dropped.
 
-            // INFO (e.g. DTMF relay): acknowledge it so it is not retransmitted.
+            // DTMF as SIP INFO (application/dtmf-relay or application/dtmf).
             msg.isRequest && msg.method == "INFO" -> {
                 sipClient.sendResponse(
                     SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
                     remoteContactAddress ?: sipClient.serverAddress
                 )
-                Log.d(TAG, "Answered INFO for call $callId (${msg.contentType})")
+                val digit = com.callagent.gateway.rtp.SipInfoDtmf.parse(msg.contentType, msg.body)
+                if (digit != null) {
+                    Log.i(TAG, "INFO DTMF '${digit.char}' (${digit.durationMs}ms) for call $callId")
+                    listener?.onDtmf(this, digit.char, digit.durationMs)
+                } else {
+                    Log.d(TAG, "INFO without DTMF for call $callId (${msg.contentType})")
+                }
                 return true
             }
 
@@ -335,6 +346,7 @@ class SipCall(
                         "$remoteRtpAddress:$remoteRtpPort) — not followed; set direct_media=no")
                 sipClient.logListener?.invoke("$what tried to move media — set direct_media=no on the server")
             }
+            msg.sdpTelephoneEventPt?.let { telephoneEventPt = it }
         }
         val ok = SipBuilder.ok200(
             msg, sipClient.username, sipClient.publicIp, sipClient.localPort,

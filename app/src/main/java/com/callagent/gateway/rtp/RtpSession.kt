@@ -101,6 +101,15 @@ class RtpSession(
     @Volatile var srtpAuthFailures = 0L
         private set
 
+    // ── DTMF (RFC 4733) ──
+    // Payload types carrying telephone-event: the one in the peer's SDP plus
+    // the 101 this gateway offers itself.  Set before start().
+    @Volatile var telephoneEventPts: Set<Int> = setOf(RtpPacket.PT_TELEPHONE_EVENT)
+    /** Receives key presses from the SIP side; null drops them as before. */
+    @Volatile var dtmfDetector: DtmfDetector? = null
+    @Volatile var rxDtmfPackets = 0L
+        private set
+
     /**
      * Encrypt if this call is protected, then send.
      *
@@ -794,6 +803,8 @@ class RtpSession(
      */
     fun stop() {
         val wasRunning = running.getAndSet(false)
+        // A key held at hang-up must not leave a tone queued on the GSM leg.
+        try { dtmfDetector?.flush() } catch (_: Exception) {}
 
         // Do this before waiting for AudioFlinger/AudioRecord threads.  On the
         // Pixel 4a an AudioTrack write can remain blocked while the old
@@ -1221,6 +1232,14 @@ class RtpSession(
                 if (rxPacketCount == 1L) {
                     Log.i(TAG, "First RX: pt=${rtp.payloadType} len=${rtp.payload.size}")
                 }
+                // Telephone-event first: a DTMF packet must never reach the
+                // jitter buffer, and it must not be dropped either — that is
+                // how IVR menus used to miss every key press.
+                if (rtp.payloadType in telephoneEventPts && rtp.payloadType != payloadType) {
+                    rxDtmfPackets++
+                    dtmfDetector?.onPacket(rtp.timestamp, rtp.payload)
+                    continue
+                }
                 if (rtp.payloadType == payloadType || rtp.payloadType == RtpPacket.PT_PCMA || rtp.payloadType == RtpPacket.PT_G722) {
                     if (!jitterBuffer.offer(rtp.payload)) {
                         jitterBuffer.poll() // drop oldest
@@ -1273,7 +1292,7 @@ class RtpSession(
                 val stats = "tx=$txPacketCount rx=$rxPacketCount play=$playbackFrames " +
                         "capRMS=$captureRms rawCapRMS=$rawCaptureRms playRMS=$playbackRms src=$audioSourceName " +
                         "rate=${captureRate}/${playbackRate} jbuf=${jitterBuffer.size} " +
-                        "drop=$rxDropped under=$underruns trim=$trimmedFrames " +
+                        "drop=$rxDropped under=$underruns trim=$trimmedFrames dtmf=$rxDtmfPackets " +
                         "gates:echo=$echoGatedFrames noise=$noiseGatedFrames fwd=$forwardedFrames dt=$doubleTalkFrames" +
                         getCpuStats()
                 Log.i(TAG, "RTP: $stats")

@@ -69,6 +69,31 @@ object GsmCallManager {
         logCallback?.invoke(msg)
     }
 
+    /**
+     * Key presses from the SIP side, played on the GSM call.
+     *
+     * Call.playDtmfTone()/stopDtmfTone() go through Telecom to the telephony
+     * stack, which signals them the right way for the bearer: RFC 4733 events
+     * on VoLTE/VoWiFi, START/STOP DTMF to the modem on a circuit-switched
+     * call.  Either way the IVR receives a clean digit, which in-band tones
+     * squeezed through AMR do not reliably give it.
+     */
+    val dtmfRelay = com.callagent.gateway.rtp.DtmfRelay(
+        sink = object : com.callagent.gateway.rtp.DtmfSink {
+            override fun start(digit: Char) {
+                val call = activeCall ?: throw IllegalStateException("no GSM call")
+                if (activeCallState != Call.STATE_ACTIVE) {
+                    throw IllegalStateException("GSM call not active (state=$activeCallState)")
+                }
+                call.playDtmfTone(digit)
+            }
+            override fun stop() {
+                activeCall?.stopDtmfTone()
+            }
+        },
+        log = { appLog(it) }
+    )
+
     interface Listener {
         /** Incoming GSM call ringing — caller number provided */
         fun onIncomingGsmCall(call: Call, number: String)

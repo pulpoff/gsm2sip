@@ -143,6 +143,16 @@ class SipMessage private constructor(
             return result
         }
 
+    /** Payload type the peer uses for RFC 4733 telephone-event, if offered.
+     *  The 8 kHz clock is preferred: that is the rate the event durations are
+     *  counted in, and the only one Asterisk sends for narrowband calls. */
+    val sdpTelephoneEventPt: Int?
+        get() {
+            val events = sdpCodecs.filter { it.second.lowercase().startsWith("telephone-event") }
+            return (events.firstOrNull { it.second.lowercase().startsWith("telephone-event/8000") }
+                ?: events.firstOrNull())?.first
+        }
+
     /** Get the preferred payload type from the remote SDP.
      *  Collects all payload types offered in the remote m=audio line,
      *  then picks OUR preferred codec: G.722 > PCMA > PCMU. */
