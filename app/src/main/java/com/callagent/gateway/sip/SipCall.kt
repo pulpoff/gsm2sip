@@ -262,6 +262,46 @@ class SipCall(
                 return true
             }
 
+            // ── In-dialog requests from the server ──────────────────
+            // None of these used to get an answer.  An unanswered INFO is
+            // retransmitted for 32s; an unanswered re-INVITE or UPDATE — a
+            // session-timer refresh, typically ~15 minutes in — makes the
+            // server tear the call down.  So long calls dropped.
+
+            // INFO (e.g. DTMF relay): acknowledge it so it is not retransmitted.
+            msg.isRequest && msg.method == "INFO" -> {
+                sipClient.sendResponse(
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    remoteContactAddress ?: sipClient.serverAddress
+                )
+                Log.d(TAG, "Answered INFO for call $callId (${msg.contentType})")
+                return true
+            }
+
+            // Re-INVITE (session refresh, hold, codec change) on an answered
+            // dialog.  A To-tag is what tells it apart from a retransmission of
+            // the initial INVITE, which must not be answered from here.
+            msg.isRequest && msg.method == "INVITE" && state == State.ANSWERED &&
+                msg.to?.contains(";tag=") == true -> {
+                answerInDialogOffer(msg, "re-INVITE")
+                return true
+            }
+
+            // UPDATE (RFC 3311) — session timers again, sometimes with SDP.
+            msg.isRequest && msg.method == "UPDATE" -> {
+                answerInDialogOffer(msg, "UPDATE")
+                return true
+            }
+
+            // In-dialog OPTIONS (some servers probe established calls).
+            msg.isRequest && msg.method == "OPTIONS" -> {
+                sipClient.sendResponse(
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    remoteContactAddress ?: sipClient.serverAddress
+                )
+                return true
+            }
+
             // ACK (for our 200 OK)
             msg.isRequest && msg.method == "ACK" -> {
                 Log.d(TAG, "Received ACK for call $callId")
@@ -273,6 +313,40 @@ class SipCall(
                 return false
             }
         }
+    }
+
+    /**
+     * Answer an in-dialog offer (re-INVITE or UPDATE) with 200 OK.
+     *
+     * The media session is not renegotiated: the answer repeats our existing
+     * port, codec offer and SRTP key, which is what a refresh expects.  If the
+     * peer moved its media, that is logged — symmetric RTP keeps sending to
+     * the address the first packets came from, so configure the server not to
+     * re-route media mid-call (Asterisk: direct_media=no).
+     */
+    private fun answerInDialogOffer(msg: SipMessage, what: String) {
+        val hasSdp = msg.body.contains("m=audio")
+        if (hasSdp) {
+            val newAddr = msg.sdpAddress
+            val newPort = msg.sdpRtpPort
+            if ((newAddr != null && newAddr != remoteRtpAddress) ||
+                (newPort != null && newPort != remoteRtpPort)) {
+                Log.w(TAG, "$what moves media to $newAddr:$newPort (was " +
+                        "$remoteRtpAddress:$remoteRtpPort) — not followed; set direct_media=no")
+                sipClient.logListener?.invoke("$what tried to move media — set direct_media=no on the server")
+            }
+        }
+        val ok = SipBuilder.ok200(
+            msg, sipClient.username, sipClient.publicIp, sipClient.localPort,
+            // A re-INVITE without SDP is a delayed offer: the 200 OK must
+            // carry one.  An UPDATE without SDP is answered without.
+            localRtpPort = if ((hasSdp || msg.method == "INVITE") && localRtpPort > 0) localRtpPort else null,
+            toTag = localTag,
+            srtp = if (srtpActive) localSrtpKeys else null,
+            srtpTag = srtpTag
+        )
+        sipClient.sendResponse(ok, remoteContactAddress ?: sipClient.serverAddress)
+        Log.i(TAG, "Answered $what for call $callId (sdp=$hasSdp)")
     }
 
     /** Accept an inbound INVITE: send 200 OK with SDP */
