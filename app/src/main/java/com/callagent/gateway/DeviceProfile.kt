@@ -200,19 +200,13 @@ data class DeviceProfile(
      *  the downlink is muted there the agent hears nothing but background. */
     val captureFromTelephonyRx: Boolean = false,
 
-    /** Capture the caller straight from this ALSA PCM device over root
-     *  (tinycap) instead of through AudioRecord; -1 = off.
+    /** Read the caller straight from an ALSA PCM over root (tinycap) instead
+     *  of through AudioRecord — see [RootCapture].  null = off.
      *
      *  For HALs where every AudioRecord route to the downlink is silent but
      *  the DSP's own capture stream is not.  AudioRecord sources remain the
      *  fallback if tinycap cannot be started or exits. */
-    val rootCapturePcm: Int = -1,
-    /** Sample rate to open [rootCapturePcm] at; a multiple of 8000. */
-    val rootCaptureRate: Int = 48000,
-    /** Mixer command run in the same su invocation, just before tinycap. */
-    val rootCaptureSetupCmd: String = "",
-    /** Mixer command run once capture stops. */
-    val rootCaptureRestoreCmd: String = "",
+    val rootCapture: RootCapture? = null,
 
     /** Ask for the playback track to be routed to the telephony TX device.
      *
@@ -500,10 +494,10 @@ data class DeviceProfile(
                     device == "sunfish" || board == "sunfish" || hw == "sunfish" ->
                     sm6150()
 
-                // Google Tensor G2 (Pixel 7 / 7 Pro / 7a).  Checked before the
-                // Exynos match below: the SoC is Samsung-derived but the audio
-                // runs on Google's AoC DSP, which has the telephony routes the
-                // Exynos HAL lacks.
+                // Google Tensor G2 (Pixel 7 / 7 Pro / 7a).  An exact match on
+                // the platform name: the SoC is Samsung-derived but the audio
+                // runs on Google's AoC DSP, and the other Tensor generations
+                // (gs101, zuma) are untested, so they are not matched here.
                 platform == "gs201" || socModel == "gs201" ->
                     tensorGs201()
 
@@ -1112,22 +1106,17 @@ data class DeviceProfile(
          *  mic picked the caller up off the earpiece and sent them back as a
          *  muffled echo.  They are AoC controls, not AudioManager mutes, so
          *  [silenceLocalAudio] stays off. */
-        fun tensorGs201() = DeviceProfile(
+        fun tensorGs201(): DeviceProfile {
+            // Mic and earpiece in (0) or out (1) of the call.
+            fun handsetMutes(v: Int) =
+                "tinymix 'Incall Mic Mute' $v 2>/dev/null; tinymix 'Incall Sink Mute' $v 2>/dev/null"
+            return DeviceProfile(
             name = "Tensor GS201 (Pixel 7)",
-            mixerSetupCmd = buildString {
-                append("tinymix 'Incall Mic Mute' 1 2>/dev/null; ")
-                append("tinymix 'Incall Sink Mute' 1 2>/dev/null")
-            },
-            mixerRestoreCmd = buildString {
-                append("tinymix 'Incall Mic Mute' 0 2>/dev/null; ")
-                append("tinymix 'Incall Sink Mute' 0 2>/dev/null")
-            },
+            mixerSetupCmd = handsetMutes(1),
+            mixerRestoreCmd = handsetMutes(0),
             // Re-asserted once playback is up, in case the HAL rewrote them
             // while programming the incall playback usecase.
-            mixerIncallMusicCmd = buildString {
-                append("tinymix 'Incall Mic Mute' 1 2>/dev/null; ")
-                append("tinymix 'Incall Sink Mute' 1 2>/dev/null")
-            },
+            mixerIncallMusicCmd = handsetMutes(1),
             mixerVerifyCmd = buildString {
                 append("echo -n 'CapStream0='; tinymix 'Incall Capture Stream0' 2>&1; ")
                 append("echo -n 'CapStream1='; tinymix 'Incall Capture Stream1' 2>&1; ")
@@ -1156,13 +1145,13 @@ data class DeviceProfile(
             // The caller is silent until they speak; do not retire the only
             // digital source during the pause before they do.
             silenceFallback = false,
-            // Accepted by the policy but does not change the mixPort it picks;
-            // kept so the AudioRecord fallback at least asks for the downlink.
-            captureFromTelephonyRx = true,
-            rootCapturePcm = 20,
-            rootCaptureRate = 48000,
-            rootCaptureSetupCmd = "tinymix 'Incall Capture Stream0' DL 2>/dev/null",
-            rootCaptureRestoreCmd = "tinymix 'Incall Capture Stream0' Off 2>/dev/null",
+            rootCapture = RootCapture(
+                card = 0,
+                device = 20,
+                rate = 48000,
+                setupCmd = "tinymix 'Incall Capture Stream0' DL 2>/dev/null",
+                restoreCmd = "tinymix 'Incall Capture Stream0' Off 2>/dev/null",
+            ),
             playbackToTelephonyTx = true,
             // The policy only offers the incall playback mixPort while
             // incall_music is on, and binds it when the track is created.
@@ -1171,7 +1160,8 @@ data class DeviceProfile(
             playbackStereo = true,
             routeChangeDelayMs = 500,
             appopsPropagationMs = 300,
-        )
+            )
+        }
 
         /** Generic Qualcomm device — tries incall_music, generic controls */
         fun genericQualcomm() = DeviceProfile(
@@ -1260,3 +1250,20 @@ data class DeviceProfile(
         )
     }
 }
+
+/**
+ * Where [DeviceProfile.rootCapture] reads the caller from: an ALSA PCM that
+ * tinycap opens under su, and the mixer commands around it.
+ *
+ * [setupCmd] runs in the same su invocation as tinycap, just before it, so
+ * the routing is set by the time the PCM opens; [restoreCmd] runs once
+ * capture stops.  Both are tinymix commands in the [DeviceProfile.resolveCmd]
+ * sense.  [rate] must be a multiple of the codec rates (8000 and 16000).
+ */
+data class RootCapture(
+    val card: Int,
+    val device: Int,
+    val rate: Int,
+    val setupCmd: String = "",
+    val restoreCmd: String = "",
+)
