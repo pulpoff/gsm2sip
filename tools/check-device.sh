@@ -36,6 +36,36 @@ echo
 
 HW=$(sh_ getprop ro.hardware)
 BOARD=$(sh_ getprop ro.board.platform)
+
+# ── Google Tensor (AoC audio DSP) ────────────────────────────────────
+# Not Qualcomm, but the AoC audio policy has its own telephony routes:
+# "incall playback" -> Telephony Tx, and Telephony Rx -> "incall capture".
+if [ "$BOARD" = "gs201" ]; then
+    POL=/vendor/etc/audio_policy_configuration.xml
+    echo "=== Google Tensor ($BOARD) ==="
+    sh_ "grep -q 'mixPort name=\"incall playback\"' $POL && echo y" | grep -q y \
+        && ok "incall playback mixPort declared" \
+        || no "no incall playback mixPort — nothing to inject the agent into"
+    sh_ "grep -q 'sink=\"Telephony Tx\" sources=\"incall playback' $POL && echo y" | grep -q y \
+        && ok "incall playback routed to Telephony Tx" \
+        || no "incall playback is not routed to Telephony Tx"
+    sh_ "grep -q 'mixPort name=\"incall capture\"' $POL && echo y" | grep -q y \
+        && ok "incall capture mixPort declared" \
+        || no "no incall capture mixPort — caller can only be heard acoustically"
+    if ! have_root; then
+        unk "mixer controls need root"
+    else
+        M=$(su_ "/data/local/tmp/tinymix")
+        echo "$M" | grep -q "Incall Capture Stream0" && ok "Incall Capture Stream0-3" || no "Incall Capture Stream*"
+        echo "$M" | grep -q "Incall Playback Stream0" && ok "Incall Playback Stream0/1" || no "Incall Playback Stream*"
+        echo "$M" | grep -q "Incall Mic Mute" && ok "Incall Mic/Sink Mute" || no "Incall Mic/Sink Mute"
+    fi
+    echo
+    echo "=== Verdict ==="
+    echo "  $pass present, $fail missing, $unknown unchecked (profile: Tensor GS201)."
+    exit 0
+fi
+
 case "$HW:$BOARD" in
     qcom:*|qualcomm:*|*:sm6150|*:sm7150|*:sm[5678]*)
         ;;

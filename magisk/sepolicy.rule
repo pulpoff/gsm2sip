@@ -1,0 +1,1 @@
+allow priv_app_36 magisk unix_stream_socket { getopt connectto }

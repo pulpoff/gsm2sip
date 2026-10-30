@@ -57,6 +57,8 @@ class RtpSession(
     @Volatile private var workers: List<Thread> = emptyList()
     private var socket: DatagramSocket? = null
     private var audioRecord: AudioRecord? = null
+    /** Set instead of [audioRecord] when the caller is read over root. */
+    @Volatile private var rootCapture: RootPcmCapture? = null
     private var audioTrack: AudioTrack? = null
     /** 1 or 2, per [DeviceProfile.playbackStereo]. */
     private var playbackChannels = 1
@@ -584,6 +586,13 @@ class RtpSession(
      * direction (GSM→SIP) takes longer to come up.
      */
     private fun captureInitAndLoop() {
+        // Root PCM capture first where the profile asks for it — see
+        // DeviceProfile.rootCapturePcm.  AudioRecord stays the fallback.
+        if (profile.rootCapturePcm >= 0 && startRootCapture()) {
+            if (captureLoop() || !running.get()) return
+            Log.w(TAG, "Root PCM capture ended early — falling back to AudioRecord sources")
+        }
+
         // Fast path: AudioRecord was already initialized in initAudio (warm boot)
         if (audioRecord != null) {
             if (captureLoop() || !running.get()) return
@@ -686,6 +695,49 @@ class RtpSession(
         Log.e(TAG, "All capture sources exhausted — capture disabled, keeping NAT alive for playback")
         while (running.get()) {
             sendSilencePackets(5000, defaultRemoteInet)
+        }
+    }
+
+    /**
+     * Start reading the caller from [DeviceProfile.rootCapturePcm] over root.
+     *
+     * The AudioRecord opened in initAudio is released once tinycap is up: it
+     * only holds a HAL capture usecase that delivers nothing on these devices.
+     */
+    private fun startRootCapture(): Boolean {
+        val wideband = payloadType != RtpPacket.PT_PCMA && payloadType != RtpPacket.PT_PCMU
+        val rate = if (wideband) 16000 else 8000
+        val cap = RootPcmCapture(
+            card = 0,
+            device = profile.rootCapturePcm,
+            pcmRate = profile.rootCaptureRate,
+            outRate = rate,
+            setupCmd = DeviceProfile.resolveCmd(profile.rootCaptureSetupCmd),
+            restoreCmd = DeviceProfile.resolveCmd(profile.rootCaptureRestoreCmd),
+        )
+        if (!cap.start()) return false
+        rootCapture = cap
+        audioRecord?.let {
+            audioRecord = null
+            try { it.stop() } catch (_: Exception) {}
+            try { it.release() } catch (_: Exception) {}
+        }
+        captureRate = rate
+        audioSourceName = cap.name
+        currentSourceId = -1
+        return true
+    }
+
+    /** Drop the current capture source, AudioRecord or root PCM. */
+    private fun releaseCaptureSource() {
+        audioRecord?.let {
+            audioRecord = null
+            try { it.stop() } catch (_: Exception) {}
+            it.release()
+        }
+        rootCapture?.let {
+            rootCapture = null
+            Thread({ it.restore() }, "root-capture-restore").start()
         }
     }
 
@@ -830,6 +882,11 @@ class RtpSession(
         workers = emptyList()
         val rec = audioRecord
         val trk = audioTrack
+        // Killing tinycap here is what lets the capture thread leave its
+        // blocking read, so it has to happen before the joins below.
+        val rootCap = rootCapture
+        rootCapture = null
+        rootCap?.close()
         audioRecord = null
         audioTrack = null
         socket = null
@@ -851,6 +908,7 @@ class RtpSession(
                 try { it.stop() } catch (_: Exception) {}
                 try { it.release() } catch (_: Exception) {}
             }
+            rootCap?.let { try { it.restore() } catch (_: Exception) {} }
             // Repeat the inactive state after the native streams are released
             // in case AudioFlinger recreated the output while they drained.
             stopHalAudioImmediately()
@@ -960,9 +1018,11 @@ class RtpSession(
      * be replaced with a fallback source.
      */
     private fun captureLoop(): Boolean {
-        val record = audioRecord ?: return false
+        val rootPcm = rootCapture
+        val record = audioRecord
+        if (rootPcm == null && record == null) return false
 
-        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+        if (record != null && record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             record.startRecording()
         }
 
@@ -977,8 +1037,8 @@ class RtpSession(
             }, "mixer-capture").start()
         }
 
-        Log.i(TAG, "Capture routedFrom=${record.routedDevice?.type}")
-        Log.i(TAG, "Capture started: source=$audioSourceName capRate=$captureRate session=$audioSessionId gain=${captureGain}x profile=${profile.name} state=${record.recordingState}")
+        if (record != null) Log.i(TAG, "Capture routedFrom=${record.routedDevice?.type}")
+        Log.i(TAG, "Capture started: source=$audioSourceName capRate=$captureRate session=$audioSessionId gain=${captureGain}x profile=${profile.name} state=${record?.recordingState ?: "root"}")
         // Also report via RTP stats so it appears in the app log viewer
         listener?.onRtpStats("Capture: source=$audioSourceName rate=$captureRate gain=${captureGain}x profile=${profile.name}")
 
@@ -1005,7 +1065,16 @@ class RtpSession(
 
         while (running.get()) {
             try {
-                val read = record.read(pcmBuf, 0, pcmBuf.size)
+                val read = rootPcm?.read(pcmBuf) ?: record!!.read(pcmBuf, 0, pcmBuf.size)
+                if (read < 0 && rootPcm != null) {
+                    // tinycap exited: hand over to the AudioRecord sources.
+                    if (!running.get()) return true
+                    val msg = "Source $audioSourceName ended — trying fallback"
+                    Log.w(TAG, msg)
+                    listener?.onRtpStats(msg)
+                    releaseCaptureSource()
+                    return false
+                }
                 if (read <= 0) continue
                 framesCaptured++
 
@@ -1031,9 +1100,7 @@ class RtpSession(
                             Log.w(TAG, msg)
                             listener?.onRtpStats(msg)
                             silentSourceIds.add(currentSourceId)
-                            try { record.stop() } catch (_: Exception) {}
-                            record.release()
-                            audioRecord = null
+                            releaseCaptureSource()
                             return false
                         }
                     }
@@ -1088,9 +1155,7 @@ class RtpSession(
                                 Log.w(TAG, msg)
                                 listener?.onRtpStats(msg)
                                 silentSourceIds.add(currentSourceId)
-                                try { record.stop() } catch (_: Exception) {}
-                                record.release()
-                                audioRecord = null
+                                releaseCaptureSource()
                                 return false  // Signal: try another source
                             }
                         }

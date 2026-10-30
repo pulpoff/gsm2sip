@@ -200,6 +200,20 @@ data class DeviceProfile(
      *  the downlink is muted there the agent hears nothing but background. */
     val captureFromTelephonyRx: Boolean = false,
 
+    /** Capture the caller straight from this ALSA PCM device over root
+     *  (tinycap) instead of through AudioRecord; -1 = off.
+     *
+     *  For HALs where every AudioRecord route to the downlink is silent but
+     *  the DSP's own capture stream is not.  AudioRecord sources remain the
+     *  fallback if tinycap cannot be started or exits. */
+    val rootCapturePcm: Int = -1,
+    /** Sample rate to open [rootCapturePcm] at; a multiple of 8000. */
+    val rootCaptureRate: Int = 48000,
+    /** Mixer command run in the same su invocation, just before tinycap. */
+    val rootCaptureSetupCmd: String = "",
+    /** Mixer command run once capture stops. */
+    val rootCaptureRestoreCmd: String = "",
+
     /** Ask for the playback track to be routed to the telephony TX device.
      *
      *  Setting incall_music_enabled is not by itself enough to make
@@ -485,6 +499,13 @@ data class DeviceProfile(
                     device == "surya" || device == "karna" ||
                     device == "sunfish" || board == "sunfish" || hw == "sunfish" ->
                     sm6150()
+
+                // Google Tensor G2 (Pixel 7 / 7 Pro / 7a).  Checked before the
+                // Exynos match below: the SoC is Samsung-derived but the audio
+                // runs on Google's AoC DSP, which has the telephony routes the
+                // Exynos HAL lacks.
+                platform == "gs201" || socModel == "gs201" ->
+                    tensorGs201()
 
                 // Generic Qualcomm — try incall_music, skip WCD9304-specific controls
                 hw.contains("qcom") || hw.contains("qualcomm") ->
@@ -1062,6 +1083,93 @@ data class DeviceProfile(
             routeChangeDelayMs = 500,
             audioRouteSettleDelayMs = 500,
             audioStopSettleDelayMs = 18_000,
+            appopsPropagationMs = 300,
+        )
+
+        /** Google Tensor G2 / gs201 (Pixel 7, LineageOS 24 on Android 17).
+         *
+         *  Audio is handled by the AoC DSP (aoc-snd-card), not a Qualcomm or
+         *  Samsung codec, and its audio policy declares both telephony routes:
+         *    "incall playback" (AUDIO_OUTPUT_FLAG_INCALL_MUSIC, 48k stereo)
+         *        -> Telephony Tx
+         *    Voice Call And Telephony Rx -> "voice call rx" / "incall capture"
+         *        (48k mono)
+         *  — the same paths Call Screen uses.
+         *
+         *  Capture cannot go through AudioRecord.  VOICE_DOWNLINK lands on
+         *  incall-capture1 (Incall Capture Stream1), which read exact zeros on
+         *  every call, and asking for the Telephony Rx device is accepted but
+         *  the policy still picks the same "incall capture" mixPort.  The
+         *  telephony-rx stream next to it, Incall Capture Stream0 on pcm20,
+         *  carried the caller cleanly through tinycap at 48k — on its own and
+         *  alongside the app's open streams, with the handset muted
+         *  (2026-10-30) — so the caller is read from there over root.
+         *
+         *  The HAL programs the Incall streams itself when the usecases open.
+         *  Incall Mic Mute / Incall Sink Mute take the handset's own mic and
+         *  earpiece out of the call while incall playback still reaches the
+         *  caller (verified on a live call, 2026-10-30) — without them the
+         *  mic picked the caller up off the earpiece and sent them back as a
+         *  muffled echo.  They are AoC controls, not AudioManager mutes, so
+         *  [silenceLocalAudio] stays off. */
+        fun tensorGs201() = DeviceProfile(
+            name = "Tensor GS201 (Pixel 7)",
+            mixerSetupCmd = buildString {
+                append("tinymix 'Incall Mic Mute' 1 2>/dev/null; ")
+                append("tinymix 'Incall Sink Mute' 1 2>/dev/null")
+            },
+            mixerRestoreCmd = buildString {
+                append("tinymix 'Incall Mic Mute' 0 2>/dev/null; ")
+                append("tinymix 'Incall Sink Mute' 0 2>/dev/null")
+            },
+            // Re-asserted once playback is up, in case the HAL rewrote them
+            // while programming the incall playback usecase.
+            mixerIncallMusicCmd = buildString {
+                append("tinymix 'Incall Mic Mute' 1 2>/dev/null; ")
+                append("tinymix 'Incall Sink Mute' 1 2>/dev/null")
+            },
+            mixerVerifyCmd = buildString {
+                append("echo -n 'CapStream0='; tinymix 'Incall Capture Stream0' 2>&1; ")
+                append("echo -n 'CapStream1='; tinymix 'Incall Capture Stream1' 2>&1; ")
+                append("echo -n 'PbStream0='; tinymix 'Incall Playback Stream0' 2>&1; ")
+                append("echo -n 'PbStream1='; tinymix 'Incall Playback Stream1' 2>&1; ")
+                append("echo -n 'MicMute='; tinymix 'Incall Mic Mute' 2>&1; ")
+                append("echo -n 'SinkMute='; tinymix 'Incall Sink Mute' 2>&1")
+            },
+            musicVolPercent = 100,
+            // The AoC downlink arrives quiet: speech at RMS 180-490, peaks
+            // ~2500 (about -36 dBFS RMS), heard as low on a softphone.  x4 puts
+            // it near -24 dBFS with headroom; the capture loop clamps.
+            captureGain = 4,
+            playbackGain = 1,
+            // VoLTE downlink is digital silence between words, so a gate only
+            // chops word tails.
+            noiseGateThreshold = 0,
+            echoGateThreshold = 300,
+            doubleTalkRatio = 1.5f,
+            // Both directions are digital: nothing needs the loudspeaker.
+            requireSpeakerMode = false,
+            incallMusicParam = "incall_music_enabled",
+            voiceDownlinkWorks = true,
+            // Downlink only — our own uplink is not folded into it.
+            playbackLeaksIntoCapture = false,
+            // The caller is silent until they speak; do not retire the only
+            // digital source during the pause before they do.
+            silenceFallback = false,
+            // Accepted by the policy but does not change the mixPort it picks;
+            // kept so the AudioRecord fallback at least asks for the downlink.
+            captureFromTelephonyRx = true,
+            rootCapturePcm = 20,
+            rootCaptureRate = 48000,
+            rootCaptureSetupCmd = "tinymix 'Incall Capture Stream0' DL 2>/dev/null",
+            rootCaptureRestoreCmd = "tinymix 'Incall Capture Stream0' Off 2>/dev/null",
+            playbackToTelephonyTx = true,
+            // The policy only offers the incall playback mixPort while
+            // incall_music is on, and binds it when the track is created.
+            incallMusicBeforeTrack = true,
+            // "incall playback" declares AUDIO_CHANNEL_OUT_STEREO only.
+            playbackStereo = true,
+            routeChangeDelayMs = 500,
             appopsPropagationMs = 300,
         )
 
