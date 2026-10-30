@@ -759,6 +759,9 @@ object GsmCallManager {
                     if (profile.incallMusicParam.isNotEmpty()) {
                         am.setParameters("${profile.incallMusicParam}=false")
                     }
+                    // In-call HAL parameters (MediaTek): back to the defaults, so
+                    // the next ordinary call on this phone has a live earpiece.
+                    for (p in profile.halCallParamsRestore) am.setParameters(p)
 
                     // Unmute voice call stream and restore volume for normal phone use
                     try {
