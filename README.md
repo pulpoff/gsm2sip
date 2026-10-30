@@ -251,6 +251,9 @@ command dies with `not executable: 64-bit ELF file`.
 
 Only the Magisk module needs to be installed — it includes the APK and handles all permissions automatically.
 
+Setting up a Google Pixel 7 from stock (firmware, LineageOS, Magisk, module):
+see [docs/pixel7-from-stock.md](docs/pixel7-from-stock.md).
+
 1. **Install Magisk module**: Copy `gateway-magisk.zip` to device, install via Magisk Manager → Modules
 2. **Reboot** the device — the module installs the APK as a privileged system app and grants all permissions on boot
 3. **Set as default phone app**: Settings → Apps → Default apps → Phone app → gsm2sip
