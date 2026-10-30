@@ -308,6 +308,10 @@ there is nothing to write on the server side:
 
 ## The longer way: your own Asterisk
 
+For a ready-to-run LAN setup — one gateway, a few softphones, calls and SMS
+fanned out to every registered client — see
+[docs/asterisk-docker.md](docs/asterisk-docker.md).
+
 The gateway is server-agnostic — it registers like any SIP client — so you can
 point it at a server you run instead. What follows is one worked example,
 using Asterisk (chan_sip) to route inbound GSM calls to an AI agent. Adapt it

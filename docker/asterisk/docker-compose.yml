@@ -1,0 +1,16 @@
+# Asterisk for a gsm2sip gateway and its clients.  See docs/asterisk-docker.md.
+services:
+  asterisk:
+    build: .
+    container_name: gsm2sip-asterisk
+    # SIP and RTP straight on the host's LAN address: no port mapping, no NAT
+    # between Asterisk and the phones.
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      # SMS that reached no client are kept here (database show sms-in)
+      - astdb:/var/lib/asterisk-db
+
+volumes:
+  astdb:
