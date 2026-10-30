@@ -230,7 +230,7 @@ Then, on the phone:
 tools/check-device.sh        # with the gateway module installed and root for adb
 ```
 
-All six Tensor checks should pass.  During a call, the mixer should read:
+All seven checks should pass, with the verdict "Fully supported on paper".  During a call, the mixer should read:
 
 ```bash
 adb shell su -c /data/local/tmp/tinymix | grep -E 'Incall (Capture|Playback) Stream|Incall (Mic|Sink) Mute'
