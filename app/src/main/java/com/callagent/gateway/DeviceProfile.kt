@@ -115,6 +115,12 @@ data class DeviceProfile(
     /** Parameters that put [halCallParams] back for ordinary phone use. */
     val halCallParamsRestore: List<String> = emptyList(),
 
+    /** Re-issue Call.answer() while the call is still ringing.
+     *
+     *  For modems that refuse ATA until some time after the call has appeared
+     *  (the MediaTek one: +CME ERROR: 604).  Off elsewhere, where a repeated
+     *  answer would only be extra modem traffic. */
+    val answerRetry: Boolean = false,
 
 
     /** Readback of the handful of controls this SoC's bridge depends on.
@@ -919,6 +925,9 @@ data class DeviceProfile(
             voiceCallVolPercent = 100,
             // STREAM_VOICE_CALL: the stream type verified to reach the BGS player.
             playbackUsage = AudioAttributes.USAGE_VOICE_COMMUNICATION,
+            // The modem sends its first RING ~1.6 s after the call appears and
+            // answers ATA with +CME ERROR: 604 before that.
+            answerRetry = true,
             playbackLeaksIntoCapture = false,
             playbackFadeIn = false,
             // The line between words on the digital source is silence; give it

@@ -244,7 +244,42 @@ object GsmCallManager {
         call?.let {
             Log.i(TAG, "Answering GSM call")
             it.answer(it.details.videoState)
+            if (profile.answerRetry) retryAnswerWhileRinging(it, 1)
         }
+    }
+
+    // On the Ulefone Metal the modem accepts ATA ~1.6 s after the call
+    // appears, so a short interval keeps the answer close to that.
+    private const val ANSWER_RETRY_DELAY_MS = 250L
+    private const val ANSWER_RETRY_MAX = 20
+
+    /**
+     * Ask again while the call is still ringing (profiles with
+     * [DeviceProfile.answerRetry] only).
+     *
+     * The SIP side can answer before the modem is ready for it: the Ulefone
+     * Metal (MediaTek) sends its first RING ~1.6 s after the incoming-call
+     * notification and an ATA before that returns `+CME ERROR: 604`.  The
+     * call then just keeps ringing for the caller; the gateway used to ask
+     * once and never again.
+     *
+     * A retry sent after the modem has already accepted the answer, but before
+     * Telecom reports ACTIVE, makes one more ATA that the modem rejects (604) —
+     * harmless, and it stops as soon as the call is no longer ringing.
+     */
+    private fun retryAnswerWhileRinging(call: Call, attempt: Int) {
+        if (attempt > ANSWER_RETRY_MAX) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                if (call.state == Call.STATE_RINGING) {
+                    Log.i(TAG, "GSM call still ringing — answering again ($attempt/$ANSWER_RETRY_MAX)")
+                    call.answer(call.details.videoState)
+                    retryAnswerWhileRinging(call, attempt + 1)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Answer retry failed: ${e.message}")
+            }
+        }, ANSWER_RETRY_DELAY_MS)
     }
 
     /** Reject a ringing GSM call */

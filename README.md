@@ -90,6 +90,10 @@ and gives both directions digitally:
   (`Invalid audio source -1`), so the app falls back to the hidden
   `(AudioAttributes, AudioFormat, size, session)` constructor with the source
   forced into the attributes (8.0 shares the framework code but is untested).
+- **Answering.** The modem sends its first `RING` about 1.6 s after the call
+  appears and refuses `ATA` before that (`+CME ERROR: 604`), so on this profile
+  the app re-asks every 250 ms while the call is still ringing.  If your dialplan starts talking the moment it answers, put a
+  short `Wait(1)` first.
 - **Permissions.** `CAPTURE_AUDIO_OUTPUT` needs the app installed as a
   priv-app, which the Magisk module already does.
 
