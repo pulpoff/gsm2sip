@@ -1,0 +1,17 @@
+[Unit]
+Description=gsm2sip GSM to SIP gateway
+Documentation=file:///usr/share/doc/gsm2sipd/README.md
+After=ModemManager.service network-online.target sound.target
+Wants=ModemManager.service network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/sbin/gsm2sipd --config /etc/gsm2sip/gateway.conf
+Restart=on-failure
+RestartSec=5
+# media threads want their 20 ms on time
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

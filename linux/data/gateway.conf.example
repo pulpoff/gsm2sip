@@ -1,0 +1,71 @@
+# /etc/gsm2sip/gateway.conf -- chmod 600: it holds the SIP password.
+# The keys mirror the Android app's settings; tools/conf-from-android-xml.py
+# writes this file from the app's shared_prefs/gateway.xml.
+
+[sip]
+server=sip.example.com
+# 5060 for UDP, 5061 for TLS when left out
+port=5060
+user=gateway1
+password=CHANGE-ME
+# SIP over TLS (system CAs, hostname checked).  Signalling only.
+tls=false
+# SDES-SRTP media.  Only honoured with tls=true: over UDP the key would be
+# readable by anyone who can read the INVITE.
+srtp=false
+# g722 (default: offer G.722 only) | both (G.722, G.711 allowed) | g711
+codec=g722
+# learn the public address from STUN for Contact and SDP
+stun=true
+# or set it yourself (turns STUN off)
+#public_ip=203.0.113.7
+# UDP signalling port; TLS uses an ephemeral one
+local_port=5062
+
+[gateway]
+# The SIM's own number.  Inbound GSM calls are sent to sip:<own_number>@server,
+# which is what the server maps to an assistant (like a DID).  International
+# form, or 00-prefixed; a national number is sent as written.
+own_number=+49123456789
+
+[audio]
+# S10e call audio taps (exynos9820-abox): the GSM downlink to capture,
+# the GSM uplink to play into.
+capture=hw:0,2
+# VSS hands the downlink over at 16 kHz (read at 32 kHz it is an octave up)
+capture_rate=16000
+capture_channels=2
+# mix | left | right
+capture_channel=mix
+# positive turns the caller up for the SIP side (clamped, so loud peaks flatten)
+capture_gain_db=8
+playback=hw:0,3
+playback_rate=48000
+# 4: the ABOX mixer takes four words a 48 kHz tick from the uplink DMA, so a
+# 2 ch stream drains twice as fast as it plays; the driver's gw_sifs_cnt (127)
+# and gw_asrc_is (16384) defaults are set for this
+playback_channels=4
+# all | a channel number: the uplink's other channels get silence
+playback_channel=all
+# negative turns the voice played into the uplink down (it is a mic input)
+playback_gain_db=-10
+# 32 | 24: 24 puts each sample in the low 3 bytes of the S32 word, for a sink
+# that reads only those (the S10e's uplink: 32 overflows it into noise)
+playback_width=24
+# 1 | 2: 2 resamples to twice playback_rate and packs two samples per frame,
+# for an uplink that reads a 4 ch frame as two 2 ch ones; with it,
+# playback_channel counts within each half of the frame
+playback_stretch=1
+# a raw S16_LE mono 48 kHz file played in a loop INSTEAD of the far end: for
+# testing the GSM uplink on its own; leave unset
+#playback_test=/root/uplink-test.raw
+# ALSA control switched on while a call plays into the uplink; none to skip
+control_card=hw:0
+uplink_switch=Call Uplink Switch
+# ALSA control that turns on once the call's audio is up: the PCMs open only then
+# (calliope never starts the voice DMAs if they are open while it boots); none to
+# open them as soon as the call is answered
+call_active=Call Active
+# held at their minimum while a call's audio is open, so the far end's voice
+# does not play on the phone (and come back through its mics); none to skip
+mute=RCV Digital PCM Volume,SPK Digital PCM Volume

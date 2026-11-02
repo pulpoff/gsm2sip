@@ -1,0 +1,2 @@
+option('srtp', type: 'feature', value: 'auto', description: 'SDES-SRTP media via libsrtp2')
+option('tests', type: 'boolean', value: true, description: 'Build the unit tests (native builds only)')
