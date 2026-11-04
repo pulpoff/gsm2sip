@@ -184,7 +184,9 @@ controls.  The gateway leaves the HAL out and drives the ABOX directly:
   and the voice processor's two uplink inputs (`ABOX NSRC0`/`NSRC1`) are
   switched from the codec (`UAIF0`) to SIFS2.  The agent replaces the
   microphone inside the DSP.  SIFS2 has to be 24-bit, the width the voice
-  processor's resampler expects from the codec; at 16 it buzzes.
+  processor's resampler expects from the codec; at 16 it buzzes.  And the
+  agent goes in 10 dB down: the voice processor applies the mic gain to it,
+  and at full level it clipped.
 - **Caller → agent:** `ABOX NSRC5` taps SIFS0, where the downlink leaves the
   voice processor, into WDMA6.  The call volume is applied before that
   point, so the profile keeps it at 70%.

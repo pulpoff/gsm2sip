@@ -146,6 +146,11 @@ data class DeviceProfile(
     /** Software gain for playback audio (agent → caller). */
     val playbackGain: Int,
 
+    /** A trim on top of [playbackGain], in dB.  Negative where the agent goes
+     *  into the call in place of the microphone: the voice processor raises
+     *  a mic input by far more than a line-level voice can take. */
+    val playbackGainDb: Double = 0.0,
+
     // ── Echo/noise gate thresholds ──
 
     /** RMS below this = modem DSP noise, send silence. */
@@ -849,6 +854,10 @@ data class DeviceProfile(
             // Digital end to end: passed through untouched, as on the S4 Mini.
             captureGain = 1,
             playbackGain = 1,
+            // NSRC0/1 apply the mic gain to whatever they read: at 0 dB the
+            // agent clipped on the caller's end.  The same -10 dB gsm2sipd
+            // uses on this voice processor.
+            playbackGainDb = -10.0,
             noiseGateThreshold = 0,
             echoGateThreshold = 300,
             doubleTalkRatio = 1.5f,

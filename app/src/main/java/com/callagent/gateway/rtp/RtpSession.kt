@@ -1046,9 +1046,11 @@ class RtpSession(
     // Audio parameters from device profile
     private val profile get() = GsmCallManager.profile
     private val captureGain get() = profile.captureGain
-    /** The profile's digital gain with the manual trim from settings applied. */
+    /** The profile's digital gain with its dB trim and the manual trim from
+     *  settings applied. */
     private val playbackGain: Double
-        get() = profile.playbackGain * GsmCallManager.agentGainFactor
+        get() = profile.playbackGain * Math.pow(10.0, profile.playbackGainDb / 20) *
+            GsmCallManager.agentGainFactor
 
     // Double-talk detection: VOICE_CALL captures uplink+downlink from
     // the modem DSP.  The uplink contains the SIP agent's voice (injected
