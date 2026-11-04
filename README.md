@@ -44,6 +44,7 @@ remote actually offered rather than failing a call over a preference.
 | Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **fully working** on LineageOS and MIUI 14 |
 | Samsung Galaxy S4 Mini (`serranolte`) | Qualcomm MSM8960, WCD9304 | digital, via `incall_music` | digital, via `VOC_REC_*` | **fully working** |
 | Google Pixel 4a (`sunfish`) | Qualcomm SM7150 | — | — | contributed support; not verified here |
+| Ulefone Metal (`metal`) | MediaTek MT6753 (MT6735 family) | digital, via the modem's background-sound player | digital, via `VOICE_DOWNLINK` | working on madOS 8.1 (Android 8.1); verified on live calls, see [MediaTek](#mediatek-mt6735mt6753) |
 | Samsung Galaxy S10e (`beyond0lte`) | Exynos 9820, CS47L93 | digital, played into the ABOX in place of the mic | digital, tapped off the ABOX downlink | **working** on LineageOS 23.2, with `abox_pos.ko` |
 
 **The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
@@ -68,6 +69,41 @@ own vendor configuration claims it cannot.  Its
 no Telephony Tx device, and `mixer_paths.xml` has no incall-music path at all,
 yet the kernel exposes `Incall_Music Audio Mixer MultiMedia1/2` and
 `MultiMedia1 Mixer VOC_REC_DL/UL` regardless.
+
+### MediaTek (MT6735/MT6753)
+
+The Ulefone Metal has no mixer to drive — its ALSA card exposes about 85 controls and
+no routing matrix — but the MediaTek audio HAL does the in-call routing itself
+and gives both directions digitally:
+
+- **Agent → caller.** During a call the HAL hands the output streams we tried
+  (`USAGE_VOICE_COMMUNICATION`, `STREAM_VOICE_CALL`) to the
+  modem's background-sound player (`AudioALSAPlaybackHandlerVoice` →
+  `BGSPlayer`).  It opens with its uplink gain at 0, so the earpiece plays the
+  agent and the caller hears nothing.  Four HAL parameters, set through
+  `AudioManager.setParameters()` once the call is up, fix that and silence the
+  handset: `Set_BGS_UL_Mute=0`, `Set_BGS_DL_Mute=1`,
+  `Set_SpeechCall_UL_Mute=1`, `Set_SpeechCall_DL_Mute=1`.  The profile restores
+  them when the call ends.
+- **Caller → agent.** `AudioSource.VOICE_DOWNLINK` at 16 kHz.  Android 8.1
+  rejects the call sources through the public `AudioRecord` constructor
+  (`Invalid audio source -1`), so the app falls back to the hidden
+  `(AudioAttributes, AudioFormat, size, session)` constructor with the source
+  forced into the attributes (8.0 shares the framework code but is untested).
+- **Answering.** The modem sends its first `RING` about 1.6 s after the call
+  appears and refuses `ATA` before that (`+CME ERROR: 604`), so on this profile
+  the app re-asks every 250 ms while the call is still ringing.  If your dialplan starts talking the moment it answers, put a
+  short `Wait(1)` first.
+- **Permissions.** `CAPTURE_AUDIO_OUTPUT` needs the app installed as a
+  priv-app, which the Magisk module already does.
+
+Tested on live calls, inbound (GSM → SIP) and outbound (SIP → GSM).  Inbound
+audio in both directions was confirmed by the RTP level statistics and by ear;
+outbound, agent → caller likewise, caller → agent by ear only (the statistics
+logged during that call show capture level 0).  For outbound, `Dial(PJSIP/+<number>@<endpoint>)` is enough: the
+gateway reads the number from the Request-URI, no `X-GSM-Forward` needed.
+Not yet checked: audio quality under real use — the echo test is dominated by
+network jitter.
 
 ### Choosing a device
 

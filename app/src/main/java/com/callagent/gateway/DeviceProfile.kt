@@ -107,6 +107,26 @@ data class DeviceProfile(
      *  null everywhere else.  See [RootPcmRoute]. */
     val rootPcm: RootPcmRoute? = null,
 
+    /** `key=value` HAL parameters set through AudioManager.setParameters()
+     *  once the call is up and before the playback track is created.
+     *
+     *  For HALs that do their in-call routing internally and expose no mixer
+     *  to drive.  MediaTek's is one: during MODE_IN_CALL every output stream is
+     *  handed to the modem's background-sound (BGS) player, but that player
+     *  opens with its uplink gain at 0, so the caller hears nothing and only
+     *  the handset's own earpiece plays the agent. */
+    val halCallParams: List<String> = emptyList(),
+
+    /** Parameters that put [halCallParams] back for ordinary phone use. */
+    val halCallParamsRestore: List<String> = emptyList(),
+
+    /** Re-issue Call.answer() while the call is still ringing.
+     *
+     *  For modems that refuse ATA until some time after the call has appeared
+     *  (the MediaTek one: +CME ERROR: 604).  Off elsewhere, where a repeated
+     *  answer would only be extra modem traffic. */
+    val answerRetry: Boolean = false,
+
 
     /** Readback of the handful of controls this SoC's bridge depends on.
      *  Logged before and after [mixerSetupCmd] so a failed setup is visible in
@@ -462,7 +482,17 @@ data class DeviceProfile(
                 socMachine in setOf("talos", "sdmmagpie", "sdmmagpiep", "magpie") ||
                 socId in setOf("355", "365", "366")
 
+            // MediaTek MT6735/MT6753 family.  The platform string is the MT6753's
+            // own ("mt6753"), while Build.HARDWARE reports the family ("mt6735");
+            // match either, plus the Ulefone Metal's codename.
+            val mt6735Family =
+                listOf(platform, hw, board, socModel).any { it.contains("mt6735") || it.contains("mt6753") } ||
+                device == "metal" && Build.MANUFACTURER.equals("Ulefone", ignoreCase = true)
+
             return when {
+                // Ulefone Metal and other MT6735/MT6753 phones sharing its audio HAL.
+                mt6735Family -> mt6753()
+
                 // Samsung Galaxy S4 Mini (MSM8930 / WCD9304)
                 board.contains("msm8930") || hw.contains("qcom") && model.contains("gt-i919") ->
                     msm8930()
@@ -849,6 +879,74 @@ data class DeviceProfile(
          *  20-30 range), so the generic profile's 350 noise gate discarded
          *  every frame and the far end heard pure silence.
          */
+        /**
+         * MediaTek MT6735/MT6753 — tested on one Ulefone Metal (madOS 8.1).
+         *
+         * No mixer work at all: the ALSA card has ~85 controls and no routing
+         * matrix, the audio HAL does the in-call routing itself.  Both
+         * directions are digital:
+         *  - agent -> caller: a track played during MODE_IN_CALL (seen with
+         *    USAGE_VOICE_COMMUNICATION and STREAM_VOICE_CALL) is handed to the
+         *    modem's background-sound player (AudioALSAPlaybackHandlerVoice ->
+         *    BGSPlayer).  It opens with UL gain 0 / DL gain 255, i.e. the
+         *    earpiece plays it and the caller does not, which is what
+         *    [halCallParams] turns around.
+         *  - caller -> agent: AudioSource.VOICE_DOWNLINK; 16 kHz and 8 kHz
+         *    both deliver audio.
+         *
+         * Local audio is silenced through the HAL's own call mutes rather than
+         * silenceLocalAudio, which mutes STREAM_VOICE_CALL.  Presumably (not
+         * measured) the BGS data is scaled by that stream's volume, so muting it
+         * would mute the agent too.  isMicrophoneMute stays off for the same
+         * reason on the Exynos (see GsmCallManager.configureAudioBridge).
+         */
+        fun mt6753() = DeviceProfile(
+            name = "MT6735/MT6753 (MediaTek)",
+            mixerSetupCmd = "",
+            mixerRestoreCmd = "",
+            mixerIncallMusicCmd = "",
+            mixerVerifyCmd = "",
+            halCallParams = listOf(
+                "Set_BGS_UL_Mute=0",        // injected audio reaches the caller
+                "Set_BGS_DL_Mute=1",        // ... and no longer plays on the earpiece
+                "Set_SpeechCall_UL_Mute=1", // handset microphone out of the call
+                "Set_SpeechCall_DL_Mute=1", // caller no longer plays on the earpiece
+            ),
+            halCallParamsRestore = listOf(
+                "Set_BGS_UL_Mute=1",
+                "Set_BGS_DL_Mute=0",
+                "Set_SpeechCall_UL_Mute=0",
+                "Set_SpeechCall_DL_Mute=0",
+            ),
+            musicVolPercent = 20,
+            // Digital both ways: pass the audio through untouched, as on the
+            // other digital profiles.
+            captureGain = 1,
+            playbackGain = 1,
+            noiseGateThreshold = 0,
+            echoGateThreshold = 300,
+            doubleTalkRatio = 1.5f,
+            requireSpeakerMode = false,
+            incallMusicParam = "",
+            voiceDownlinkWorks = true,
+            // Presumably the BGS data is scaled by STREAM_VOICE_CALL's volume
+            // (not measured), so keep it at maximum; the earpiece is silenced
+            // separately by Set_SpeechCall_DL_Mute.
+            voiceCallVolPercent = 100,
+            // STREAM_VOICE_CALL: the stream type verified to reach the BGS player.
+            playbackUsage = AudioAttributes.USAGE_VOICE_COMMUNICATION,
+            // The modem sends its first RING ~1.6 s after the call appears and
+            // answers ATA with +CME ERROR: 604 before that.
+            answerRetry = true,
+            playbackLeaksIntoCapture = false,
+            playbackFadeIn = false,
+            // The line between words on the digital source is silence; give it
+            // the same patience as the other digital sources.
+            captureSilenceFrames = 300,
+            routeChangeDelayMs = 500,
+            appopsPropagationMs = 300,
+        )
+
         fun sm6150() = DeviceProfile(
             name = "SM6150/SM7150 (WCD9375)",
             mixerSetupCmd = buildString {

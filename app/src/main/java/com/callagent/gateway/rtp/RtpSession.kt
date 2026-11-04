@@ -302,6 +302,7 @@ class RtpSession(
         // it after AudioRecord exists is too late — VOICE_CALL is already bound
         // to a plain capture path and returns silence.
         setHalCallState(2)
+        applyHalCallParams()
 
         // Telecom may still be completing the earpiece -> speaker transition
         // when the GSM call first becomes ACTIVE.  On the Pixel 4a, opening an
@@ -435,12 +436,7 @@ class RtpSession(
                     continue
                 }
                 val bufSize = minBuf.coerceAtLeast(cfg.rate / 50 * 2 * 2) // 40ms (two RTP frames)
-                val rec = AudioRecord(
-                    cfg.source, cfg.rate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufSize
-                )
+                val rec = newAudioRecord(cfg.source, cfg.rate, bufSize)
                 if (profile.captureFromTelephonyRx) {
                     routeCaptureToTelephonyRx(rec)
                 }
@@ -713,12 +709,7 @@ class RtpSession(
                         )
                         if (minBuf <= 0) continue
                         val bufSize = minBuf.coerceAtLeast(cfg.rate / 50 * 2 * 2)
-                        val rec = AudioRecord(
-                            cfg.source, cfg.rate,
-                            AudioFormat.CHANNEL_IN_MONO,
-                            AudioFormat.ENCODING_PCM_16BIT,
-                            bufSize
-                        )
+                        val rec = newAudioRecord(cfg.source, cfg.rate, bufSize)
                         if (profile.captureFromTelephonyRx) {
                         routeCaptureToTelephonyRx(rec)
                     }
@@ -892,6 +883,11 @@ class RtpSession(
         // incall_music_uplink output is still alive; waiting first lets the
         // next call open a second output on top of that stale one.
         stopHalAudioImmediately()
+        // Put the in-call HAL parameters back here as well as in
+        // GsmCallManager.restoreAudio(): that one is skipped when the
+        // InCallService is already gone, which would leave the handset's mic and
+        // earpiece muted for the next ordinary call.
+        restoreHalCallParams()
 
         if (!wasRunning) {
             notifyRtpStopped()
@@ -1626,6 +1622,69 @@ class RtpSession(
         } catch (e: Exception) {
             Log.w(TAG, "setHalCallState($state) failed: ${e.message}")
         }
+    }
+
+    /**
+     * Set the profile's in-call HAL parameters.  See DeviceProfile.halCallParams
+     * for why a HAL without a mixer needs them.
+     */
+    private fun applyHalCallParams() {
+        if (profile.halCallParams.isEmpty()) return
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            for (p in profile.halCallParams) am.setParameters(p)
+            Log.i(TAG, "HAL call params set: ${profile.halCallParams}")
+        } catch (e: Exception) {
+            Log.w(TAG, "applyHalCallParams failed: ${e.message}")
+        }
+    }
+
+    /** Undo [applyHalCallParams]; a no-op for profiles that set none. */
+    private fun restoreHalCallParams() {
+        if (profile.halCallParamsRestore.isEmpty()) return
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            for (p in profile.halCallParamsRestore) am.setParameters(p)
+        } catch (e: Exception) {
+            Log.w(TAG, "restoreHalCallParams failed: ${e.message}")
+        }
+    }
+
+    /**
+     * AudioRecord for [source].  Android 8.1 refuses the call sources
+     * (VOICE_UPLINK/DOWNLINK/CALL) through the public constructor (8.0 shares
+     * the framework code but is untested): the
+     * AudioAttributes it builds drops a capture preset it does not know, and the
+     * constructor then throws "Invalid audio source -1".  The hidden
+     * (attributes, format, size, session) constructor takes the preset as given,
+     * so build the attributes by hand and force the source into them.
+     * Only reached when the public constructor throws.
+     */
+    private fun newAudioRecord(source: Int, rate: Int, bufSize: Int): AudioRecord {
+        try {
+            return AudioRecord(
+                source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize
+            )
+        } catch (e: IllegalArgumentException) {
+            Log.i(TAG, "AudioRecord source=$source rejected by the public constructor " +
+                "(${e.message}); trying the hidden one")
+        }
+        val attrs = AudioAttributes.Builder().build()
+        AudioAttributes::class.java.getDeclaredField("mSource").apply {
+            isAccessible = true
+            setInt(attrs, source)
+        }
+        val fmt = AudioFormat.Builder()
+            .setSampleRate(rate)
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+            .build()
+        val ctor = AudioRecord::class.java.getDeclaredConstructor(
+            AudioAttributes::class.java, AudioFormat::class.java,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType
+        )
+        ctor.isAccessible = true
+        return ctor.newInstance(attrs, fmt, bufSize, 0)
     }
 
     /** Mute or unmute the agent towards the caller. */
