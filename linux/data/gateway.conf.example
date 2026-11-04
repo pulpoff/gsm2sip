@@ -27,6 +27,12 @@ local_port=5062
 # which is what the server maps to an assistant (like a DID).  International
 # form, or 00-prefixed; a national number is sent as written.
 own_number=+49123456789
+# The app's Enabled switch.  false: the daemon leaves the modem alone and the
+# phone's own apps (GNOME Calls, Chatty) take its calls and messages.
+#enabled=true
+# The app's "ASCII-only outgoing SMS": für -> fuer, for radios that read GSM-7
+# against the ASCII table.  Non-Latin text is always sent as written.
+#sms_ascii=false
 
 [audio]
 # S10e call audio taps (exynos9820-abox): the GSM downlink to capture,
@@ -49,6 +55,8 @@ playback_channels=4
 playback_channel=all
 # negative turns the voice played into the uplink down (it is a mic input)
 playback_gain_db=-10
+# The app's Agent Volume, -3..+3 (x0.40 .. x2.8) on top of playback_gain_db.
+#agent_volume=0
 # 32 | 24: 24 puts each sample in the low 3 bytes of the S32 word, for a sink
 # that reads only those (the S10e's uplink: 32 overflows it into noise)
 playback_width=24
@@ -66,6 +74,7 @@ uplink_switch=Call Uplink Switch
 # (calliope never starts the voice DMAs if they are open while it boots); none to
 # open them as soon as the call is answered
 call_active=Call Active
-# held at their minimum while a call's audio is open, so the far end's voice
-# does not play on the phone (and come back through its mics); none to skip
+# held at their minimum from a GSM call's first ring or dial until it ends, so
+# neither the network's ringback and announcements nor the far end's voice play
+# on the phone (and come back through its mics); none to skip
 mute=RCV Digital PCM Volume,SPK Digital PCM Volume

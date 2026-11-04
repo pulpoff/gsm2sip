@@ -1,0 +1,21 @@
+/* values-night/colors.xml: over style.css while the system is dark (main.c) */
+:root {
+	--gs-bg: #111827;
+	--gs-surface: #1F2937;
+	--gs-text: #F9FAFB;
+	--gs-label: #D1D5DB;
+	--gs-secondary: #9CA3AF;
+	--gs-log: #9CA3AF;
+	--gs-hint: #6B7280;
+	--gs-border-input: #4B5563;
+	--gs-border-card: #374151;
+	--gs-tls: #FACC15;
+	--gs-srtp: #60A5FA;
+
+	--accent-color: var(--gs-accent);
+	--window-bg-color: var(--gs-bg);
+	--window-fg-color: var(--gs-text);
+	--dialog-bg-color: var(--gs-surface);
+	--dialog-fg-color: var(--gs-text);
+	--popover-bg-color: var(--gs-surface);
+}

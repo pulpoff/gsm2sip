@@ -153,3 +153,76 @@ gw_json_append_string (GString *s, const char *v)
 	}
 	g_string_append_c (s, '"');
 }
+
+/* spellings that are conventions, not accents: decomposition turns ü into
+ * u, not ue, and can do nothing with ß */
+static const struct {
+	gunichar c;
+	const char *to;
+} ascii_explicit[] = {
+	{ 0x00e4, "ae" }, { 0x00f6, "oe" }, { 0x00fc, "ue" },
+	{ 0x00c4, "Ae" }, { 0x00d6, "Oe" }, { 0x00dc, "Ue" },
+	{ 0x00df, "ss" }, { 0x1e9e, "Ss" },
+	{ 0x00e6, "ae" }, { 0x00c6, "Ae" },
+	{ 0x0153, "oe" }, { 0x0152, "Oe" },
+	{ 0x00f8, "oe" }, { 0x00d8, "Oe" },
+	{ 0x00e5, "aa" }, { 0x00c5, "Aa" },
+	{ 0x00fe, "th" }, { 0x00de, "Th" },
+	{ 0x00f0, "d" }, { 0x00d0, "D" },
+	{ 0x0142, "l" }, { 0x0141, "L" },
+	/* punctuation word processors and language models emit freely */
+	{ 0x2014, "-" }, { 0x2013, "-" }, { 0x2011, "-" },
+	{ 0x2026, "..." },
+	{ 0x2018, "'" }, { 0x2019, "'" }, { 0x201a, "'" },
+	{ 0x201c, "\"" }, { 0x201d, "\"" }, { 0x201e, "\"" },
+	{ 0x00ab, "\"" }, { 0x00bb, "\"" },
+	{ 0x2192, "->" }, { 0x2190, "<-" }, { 0x21d2, "=>" },
+	{ 0x2022, "*" }, { 0x25cf, "*" }, { 0x00b7, "-" },
+	{ 0x20ac, "EUR" }, { 0x00a3, "GBP" },
+	/* spaces that are not the ASCII space */
+	{ 0x00a0, " " }, { 0x2009, " " }, { 0x202f, " " },
+};
+
+static gboolean
+ascii_sendable (gunichar c)
+{
+	return (c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t';
+}
+
+char *
+gw_sms_ascii_or_null (const char *utf8)
+{
+	if (!utf8 || !g_utf8_validate (utf8, -1, NULL))
+		return NULL;
+	gboolean plain = TRUE;
+	for (const unsigned char *p = (const unsigned char *)utf8; *p && plain; p++)
+		plain = (*p >= 32 && *p <= 126) || *p == '\n' || *p == '\r';
+	if (plain)
+		return g_strdup (utf8);
+	g_autoptr (GString) s = g_string_new (NULL);
+	for (const char *p = utf8; *p; p = g_utf8_next_char (p)) {
+		gunichar c = g_utf8_get_char (p);
+		const char *to = NULL;
+		for (gsize i = 0; i < G_N_ELEMENTS (ascii_explicit) && !to; i++)
+			if (ascii_explicit[i].c == c)
+				to = ascii_explicit[i].to;
+		if (to)
+			g_string_append (s, to);
+		else
+			g_string_append_unichar (s, c);
+	}
+	/* then decomposition for anything merely accented: é becomes e */
+	g_autofree char *nfd = g_utf8_normalize (s->str, -1, G_NORMALIZE_NFD);
+	GString *out = g_string_new (NULL);
+	for (const char *p = nfd; p && *p; p = g_utf8_next_char (p)) {
+		gunichar c = g_utf8_get_char (p);
+		if (g_unichar_type (c) == G_UNICODE_NON_SPACING_MARK)
+			continue;
+		if (!ascii_sendable (c)) {
+			g_string_free (out, TRUE);
+			return NULL;
+		}
+		g_string_append_c (out, (char)c);
+	}
+	return g_string_free (out, FALSE);
+}

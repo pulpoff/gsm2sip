@@ -23,6 +23,7 @@ typedef struct {
 	int playback_channels;		/* 2, S32_LE */
 	int playback_channel;		/* -1 every channel, else only this one (the rest silent) */
 	int playback_gain_db;		/* 0; negative turns what goes into the uplink down */
+	int agent_volume;		/* 0; the app's Agent Volume step, -3..+3, on top of the gain */
 	int playback_width;		/* 32: samples MSB-aligned in the S32 word; 24: in its low 3 bytes */
 	int playback_stretch;		/* 1; 2: each PCM frame carries two samples at twice the rate */
 	const char *playback_test;	/* NULL; raw S16_LE mono 48 kHz played in a loop instead of the far end */
@@ -37,6 +38,9 @@ typedef struct {
 	void (*timeout) (gpointer ud);
 } RtpCallbacks;
 
+/* The Android app's agent volume steps: x0.40 .. x2.8, 1.0 at step 0. */
+double rtp_agent_volume_factor (int step);
+
 /* Binds an even UDP port in 30000-40000 and keeps it, so the port put in
  * the SDP cannot be taken by anyone else before the media starts. */
 RtpSession *rtp_session_new (GError **err);
@@ -50,8 +54,16 @@ gboolean rtp_session_set_srtp (RtpSession *s, int tag_bits, const guint8 *send_k
 gboolean rtp_session_start (RtpSession *s, const RtpAudioConfig *ac, const char *remote_ip, const char *fallback_ip,
 			    int remote_port, int pt, int te_pt, const RtpCallbacks *cb, gpointer ud, GError **err);
 
+/* The GSM party hears silence instead of the agent (the app's Mute). */
+void rtp_session_set_agent_muted (RtpSession *s, gboolean muted);
+
 /* A key press from SIP INFO, played into the GSM uplink. */
 void rtp_session_dtmf_pulse (RtpSession *s, char digit, int duration_ms);
+
+/* Holds the controls in ac->mute at their minimum (on) or puts them back.
+ * The bridge's, for the whole GSM call: the network plays its ringback or an
+ * announcement before the call is up.  Muting twice does nothing. */
+void rtp_mute_amps (const RtpAudioConfig *ac, gboolean on);
 
 /* Stops the threads, releases the PCMs, switches the uplink tap off. */
 void rtp_session_free (RtpSession *s);

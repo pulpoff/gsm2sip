@@ -1,0 +1,165 @@
+/* The Android app's colours (values/colors.xml); dark.css has values-night.
+ * Sizes are its dp and sp, 1:1 in px. */
+:root {
+	--gs-accent: #34D399;
+	--gs-accent-on: #052E16;
+	--gs-primary: #2563EB;
+	--gs-bg: #F9FAFB;
+	--gs-surface: #FFFFFF;
+	--gs-text: #111827;
+	--gs-label: #374151;
+	--gs-secondary: #6B7280;
+	--gs-log: #4B5563;
+	--gs-hint: #9CA3AF;
+	--gs-btn2: #374151;
+	/* on btn2: Android puts text_primary there, near-black on dark grey in
+	 * the light theme; light text reads in both */
+	--gs-btn2-fg: #F9FAFB;
+	--gs-border-input: #D1D5DB;
+	--gs-border-card: #E5E7EB;
+	--gs-tls: #CA8A04;
+	--gs-srtp: #2563EB;
+
+	--accent-bg-color: var(--gs-accent);
+	--accent-fg-color: var(--gs-accent-on);
+	--accent-color: #059669;
+	--window-bg-color: var(--gs-bg);
+	--window-fg-color: var(--gs-text);
+	--dialog-bg-color: var(--gs-surface);
+	--dialog-fg-color: var(--gs-text);
+	--popover-bg-color: var(--gs-surface);
+}
+
+window.gs { background-color: var(--gs-bg); color: var(--gs-text); }
+
+.gs-page { padding: 14px; }
+.gs-title { font-size: 20px; font-weight: bold; color: var(--gs-text); }
+
+/* input_bg and card_bg */
+.gs-input-bg { background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px; }
+.gs-card { background-color: var(--gs-surface); border: 1px solid var(--gs-border-card); border-radius: 8px; }
+
+/* header icon buttons and badges */
+button.gs-iconbtn {
+	min-width: 42px; min-height: 42px; padding: 0;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+	color: var(--gs-secondary); box-shadow: none;
+}
+button.gs-iconbtn image { -gtk-icon-size: 24px; }
+button.gs-iconbtn.gs-danger { color: #EF4444; }
+.gs-badge {
+	min-height: 33px; min-width: 14px; padding: 0 9px;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+	box-shadow: none;
+}
+.gs-badge image { -gtk-icon-size: 14px; }
+.gs-online { color: #34D399; }
+.gs-connecting { color: #FBBF24; }
+.gs-offline { color: #F87171; }
+.gs-tls { color: var(--gs-tls); }
+.gs-srtp { color: var(--gs-srtp); }
+
+/* the two link chips */
+button.gs-linkchip {
+	padding: 8px; min-height: 0;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+	box-shadow: none;
+}
+button.gs-linkchip label { font-family: monospace; font-size: 12px; color: var(--gs-secondary); font-weight: normal; }
+
+/* MaterialButton: 4dp corners, medium weight, letter-spaced, a 2dp shadow */
+button.gs-material {
+	border-radius: 4px; font-weight: 500; letter-spacing: 0.089em;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.14);
+}
+togglebutton.gs-chip, button.gs-chip {
+	min-height: 42px; padding: 0 12px; font-size: 13px; font-weight: 500; letter-spacing: 0.04em;
+	border-radius: 4px; background-color: var(--gs-btn2); color: var(--gs-btn2-fg);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+togglebutton.gs-chip:checked { background-color: var(--gs-accent); color: var(--gs-accent-on); }
+
+/* active-call card */
+.gs-callcard { padding: 16px; }
+.gs-call-active { font-size: 13px; font-weight: bold; color: #34D399; }
+.gs-dirpill {
+	font-size: 11px; color: var(--gs-secondary); padding: 4px 10px;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+}
+.gs-timer { font-family: monospace; font-size: 44px; font-weight: bold; color: var(--gs-text); }
+.gs-callnum { font-size: 20px; font-weight: bold; color: var(--gs-text); }
+.gs-connected { font-size: 14px; color: #60A5FA; }
+button.gs-callbtn {
+	min-height: 62px; padding: 8px 0 6px 0; font-size: 11px;
+	background-color: var(--gs-btn2); color: var(--gs-btn2-fg);
+}
+button.gs-callbtn image { -gtk-icon-size: 24px; }
+button.gs-callbtn.gs-end { background-color: #B91C1C; color: #FFFFFF; }
+
+/* recents */
+.gs-caption { font-size: 12px; font-weight: bold; color: var(--gs-secondary); }
+.gs-row { padding: 12px; }
+.gs-iconbox {
+	min-width: 22px; min-height: 22px; padding: 9px;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+}
+.gs-iconbox image { -gtk-icon-size: 22px; }
+.gs-in { color: #16A34A; }
+.gs-out { color: #2563EB; }
+.gs-rownum { font-size: 16px; font-weight: bold; color: var(--gs-text); }
+.gs-rowsub { font-size: 13px; color: var(--gs-secondary); }
+.gs-rowtime { font-size: 12px; color: var(--gs-secondary); }
+.gs-dur { font-size: 14px; font-weight: bold; }
+.gs-dur-ok { color: #34D399; }
+.gs-dur-none { color: #F87171; }
+.gs-dur-sms { color: #60A5FA; }
+.gs-empty { font-size: 13px; color: var(--gs-hint); padding: 14px 0; }
+
+/* settings */
+.gs-appname { font-size: 16px; font-weight: bold; color: var(--gs-text); }
+.gs-version { font-size: 12px; color: var(--gs-label); }
+.gs-label { font-size: 14px; font-weight: bold; color: var(--gs-label); }
+.gs-help { font-size: 12px; color: var(--gs-hint); }
+.gs-simcap { font-size: 11px; color: var(--gs-hint); }
+entry.gs-field, passwordentry.gs-field {
+	min-height: 0; padding: 12px; font-size: 18px;
+	background-color: var(--gs-surface); border: 1px solid var(--gs-border-input); border-radius: 6px;
+	color: var(--gs-text); box-shadow: none; outline: none;
+}
+entry.gs-field:focus-within, passwordentry.gs-field:focus-within { border-color: var(--gs-accent); }
+checkbutton.gs-check label { font-size: 14px; color: var(--gs-label); }
+checkbutton.gs-check check, checkbutton.gs-check radio {
+	background-color: transparent; border: 2px solid var(--gs-accent); box-shadow: none;
+}
+checkbutton.gs-check check:checked, checkbutton.gs-check radio:checked {
+	background-color: var(--gs-accent); color: var(--gs-bg);
+}
+checkbutton.gs-check radio:checked { background-color: transparent; color: var(--gs-accent); }
+.gs-volval { font-weight: bold; color: var(--gs-label); }
+scale.gs-scale trough { min-height: 4px; }
+scale.gs-scale highlight { background-color: var(--gs-accent); }
+scale.gs-scale slider { background-color: var(--gs-accent); }
+.gs-enable-card { padding: 12px 14px; }
+.gs-enable-title { font-size: 16px; font-weight: bold; color: var(--gs-text); }
+button.gs-clear {
+	min-height: 40px; padding: 0 20px; font-size: 12px;
+	background-color: var(--gs-btn2); color: #F87171;
+}
+button.gs-save {
+	min-height: 52px; font-weight: bold;
+	background-color: var(--gs-accent); color: var(--gs-accent-on);
+}
+
+/* logs */
+.gs-logpane { background-color: var(--gs-surface); }
+textview.gs-log, textview.gs-log text {
+	font-family: monospace; font-size: 12px; color: var(--gs-log); background-color: var(--gs-surface);
+}
+
+/* detail dialogs: pre-formatted, aligned on a monospace column */
+label.gs-detail { font-family: monospace; font-size: 12px; color: var(--gs-text); padding: 10px 19px; }
+
+/* AlertDialog buttons: primary-coloured text, Material's caps and spacing */
+dialog.gs-dialog .response-area button {
+	color: var(--gs-primary); font-weight: 500; letter-spacing: 0.089em;
+}

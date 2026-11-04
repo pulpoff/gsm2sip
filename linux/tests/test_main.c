@@ -4,9 +4,11 @@
 #include "dsp.h"
 #include "g722.h"
 #include "gwutil.h"
+#include "recents.h"
 #include "sipclient.h"
 #include "sipmsg.h"
 #include "stun.h"
+#include <glib/gstdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -597,6 +599,64 @@ test_sms_measure (void)
 }
 
 static void
+test_sms_ascii (void)
+{
+	g_autofree char *a = gw_sms_ascii_or_null ("Grüße aus München — café");
+	g_assert_cmpstr (a, ==, "Gruesse aus Muenchen - cafe");
+	g_autofree char *b = gw_sms_ascii_or_null ("plain\ntext");
+	g_assert_cmpstr (b, ==, "plain\ntext");
+	g_autofree char *c = gw_sms_ascii_or_null ("„Łódź“ 5 €");
+	g_assert_cmpstr (c, ==, "\"Lodz\" 5 EUR");
+	/* no ASCII spelling: left to go out as UCS-2 */
+	g_assert_null (gw_sms_ascii_or_null ("Привет"));
+	g_assert_null (gw_sms_ascii_or_null ("ok 日本"));
+}
+
+static void
+test_recents (void)
+{
+	g_autofree char *dir = g_dir_make_tmp ("gsm2sip-XXXXXX", NULL);
+	g_autofree char *path = g_build_filename (dir, "sub", "recents", NULL);
+	GwRecents *r = gw_recents_new (path);
+	gw_recents_add_call (r, TRUE, "+491701234567", 1000, 28);
+	gw_recents_add_sms (r, TRUE, "+491701234567", 2000, "hi \"there\"", "id-1", NULL, 1, NULL);
+	/* read off the modem again after a restart: listed once */
+	gw_recents_add_sms (r, TRUE, "+491701234567", 2000, "hi \"there\"", "id-1", NULL, 1, NULL);
+	gw_recents_add_sms (r, FALSE, "+4930", 3000, "out", "id-2", "GSM7", 1, "pending");
+	g_assert_true (gw_recents_update_sms (r, "id-2", "failed", "no network"));
+	g_assert_false (gw_recents_update_sms (r, "id-x", "sent", NULL));
+	gw_recents_free (r);
+
+	r = gw_recents_new (path);
+	g_assert_cmpuint (gw_recents_count (r), ==, 3);
+	g_autoptr (GVariant) l = g_variant_ref_sink (gw_recents_list (r));
+	g_autoptr (GVariant) top = g_variant_get_child_value (l, 0);
+	const char *st = NULL, *err = NULL, *type = NULL;
+	g_assert_true (g_variant_lookup (top, "status", "&s", &st));
+	g_assert_true (g_variant_lookup (top, "err", "&s", &err));
+	g_assert_cmpstr (st, ==, "failed");
+	g_assert_cmpstr (err, ==, "no network");
+	g_autoptr (GVariant) last = g_variant_get_child_value (l, 2);
+	gint64 dur = 0;
+	g_assert_true (g_variant_lookup (last, "type", "&s", &type));
+	g_assert_true (g_variant_lookup (last, "dur", "x", &dur));
+	g_assert_cmpstr (type, ==, "CALL");
+	g_assert_cmpint (dur, ==, 28);
+	for (int i = 0; i < 600; i++)
+		gw_recents_add_call (r, FALSE, "1", i, 0);
+	g_assert_cmpuint (gw_recents_count (r), ==, 500);
+	gw_recents_clear (r);
+	gw_recents_free (r);
+	r = gw_recents_new (path);
+	g_assert_cmpuint (gw_recents_count (r), ==, 0);
+	gw_recents_free (r);
+	g_unlink (path);
+	g_autofree char *sub = g_path_get_dirname (path);
+	g_rmdir (sub);
+	g_rmdir (dir);
+}
+
+static void
 test_sms_ids_and_time (void)
 {
 	g_autofree char *a = gw_sms_stable_id ("+4930", "2026-11-01T03:12:45+01:00", "hi");
@@ -639,5 +699,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/util/numbers", test_numbers);
 	g_test_add_func ("/util/sms-measure", test_sms_measure);
 	g_test_add_func ("/util/sms-ids-time", test_sms_ids_and_time);
+	g_test_add_func ("/util/sms-ascii", test_sms_ascii);
+	g_test_add_func ("/util/recents", test_recents);
 	return g_test_run ();
 }

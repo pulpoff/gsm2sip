@@ -28,3 +28,10 @@ char *gw_iso_utc(GDateTime *when);
 char *gw_iso_utc_from_mm(const char *mm_timestamp);
 
 void gw_json_append_string(GString *s, const char *v);
+
+/* The Android app's Transliterate.toAsciiOrNull: German and other Latin text
+ * spelled in plain ASCII ("für" -> "fuer"), so a radio that reads GSM-7
+ * septets against the ASCII table cannot turn ü into '~'.  NULL when some of
+ * it has no ASCII spelling (Cyrillic, Greek, CJK...): such text goes out as
+ * UCS-2 anyway, which that mis-decode never touches, so it is sent as is. */
+char *gw_sms_ascii_or_null(const char *utf8);

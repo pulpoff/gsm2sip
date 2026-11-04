@@ -8,6 +8,7 @@
  * normally ends the call first */
 #define SIP_RING_MAX_US (70 * G_USEC_PER_SEC)
 #define GSM_DIAL_TIMEOUT_MS 45000
+#define UNMUTE_DELAY_MS 1000
 #define MAX_SIP_RETRIES 2
 #define MIN_DIALABLE_DIGITS 3
 #define SMS_RETRY_S 60
@@ -27,6 +28,7 @@ typedef struct {
 
 struct Bridge {
 	char *own_number;	/* international form */
+	gboolean sms_ascii;
 	RtpAudioConfig audio;
 	char *cap_dev, *pb_dev, *ctl_card, *uplink, *active, *mute;
 	SipClient *sip;
@@ -35,6 +37,7 @@ struct Bridge {
 	BridgeState state;
 	guint64 generation;
 	GList *timers;		/* source ids, for bridge_free */
+	guint unmute;		/* puts the amps back a moment after the call */
 
 	SipCall *sip_call;
 	int sip_attempt;
@@ -53,22 +56,81 @@ struct Bridge {
 	guint sms_retry;
 	GHashTable *seen;	/* X-SMS-Id of messages accepted from the server */
 	GQueue seen_order;
+
+	GwRecents *recents;
+	BridgeStateNotify notify;
+	gpointer notify_data;
+	/* the call being listed: from when it arrived or was dialled, so an
+	 * attempt that never bridged has a time to show */
+	gint64 attempt_ms, bridged_us;
+	gboolean attempt_incoming;
+	char *attempt_number;
+	gboolean agent_muted;	/* the app's Mute, for the call in progress */
 };
 
-static const char *
-state_name (BridgeState s)
+const char *
+bridge_state_name (BridgeState s)
 {
 	static const char *n[] = { "IDLE", "GSM_RINGING", "GSM_ANSWERED", "SIP_CALLING", "SIP_RINGING",
 				   "BRIDGED", "GSM_DIALING", "TEARING_DOWN" };
 	return n[s];
 }
 
+static gboolean
+unmute_amps (gpointer data)
+{
+	Bridge *b = data;
+	b->unmute = 0;
+	rtp_mute_amps (&b->audio, FALSE);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 set_state (Bridge *b, BridgeState s, const char *info)
 {
-	if (b->state != s)
-		g_message ("%s -> %s%s%s", state_name (b->state), state_name (s), info ? ": " : "", info ? info : "");
+	if (b->state == s)
+		return;
+	g_message ("%s -> %s%s%s", bridge_state_name (b->state), bridge_state_name (s), info ? ": " : "", info ? info : "");
+	/* every state but IDLE has a GSM call, whose downlink the phone's own
+	 * earpiece and speaker would play from the first ringback on; at IDLE
+	 * the hangup is still on its way to the modem */
+	if (s != BRIDGE_IDLE) {
+		if (b->unmute) {
+			g_source_remove (b->unmute);
+			b->unmute = 0;
+		}
+		rtp_mute_amps (&b->audio, TRUE);
+	} else if (!b->unmute) {
+		b->unmute = g_timeout_add (UNMUTE_DELAY_MS, unmute_amps, b);
+	}
 	b->state = s;
+	if (s == BRIDGE_BRIDGED && b->attempt_ms && !b->bridged_us)
+		b->bridged_us = g_get_monotonic_time ();
+	if (b->notify)
+		b->notify (s, info, b->notify_data);
+}
+
+static void
+attempt_begin (Bridge *b, gboolean incoming, const char *number)
+{
+	b->attempt_ms = g_get_real_time () / 1000;
+	b->bridged_us = 0;
+	b->attempt_incoming = incoming;
+	g_free (b->attempt_number);
+	b->attempt_number = g_strdup (number && *number ? number : "anonymous");
+}
+
+static void
+attempt_end (Bridge *b)
+{
+	if (!b->attempt_ms)
+		return;
+	/* zero is how the list shows a call that never connected */
+	gint64 dur = b->bridged_us ? (g_get_monotonic_time () - b->bridged_us) / G_USEC_PER_SEC : 0;
+	if (b->recents)
+		gw_recents_add_call (b->recents, b->attempt_incoming, b->attempt_number, b->attempt_ms, dur);
+	b->attempt_ms = b->bridged_us = 0;
+	g_clear_pointer (&b->attempt_number, g_free);
 }
 
 BridgeState bridge_state (Bridge *b) { return b->state; }
@@ -149,8 +211,10 @@ tear_down (Bridge *b, const char *reason, int code, const char *phrase)
 	}
 	g_clear_pointer (&b->gsm_caller, g_free);
 	b->pending_rtp = FALSE;
+	b->agent_muted = FALSE;
 	b->gsm_terminated = FALSE;
 	b->generation++;
+	attempt_end (b);
 	set_state (b, BRIDGE_IDLE, reason);
 }
 
@@ -201,6 +265,7 @@ start_rtp (Bridge *b)
 		return FALSE;
 	}
 	RtpCallbacks cb = { .timeout = on_rtp_timeout };
+	rtp_session_set_agent_muted (b->rtp, b->agent_muted);
 	if (!rtp_session_start (b->rtp, &b->audio, c->remote_rtp_addr, sip_client_server_ip (b->sip), c->remote_rtp_port,
 				c->pt, c->te_pt, &cb, b, &err)) {
 		tear_down (b, err->message, 503, "Service Unavailable");
@@ -283,7 +348,7 @@ on_incoming_gsm (Bridge *b, const char *path, const char *number)
 	if (b->state != BRIDGE_IDLE) {
 		if (!g_strcmp0 (path, b->gsm_path))
 			return;
-		g_message ("Busy (%s) — rejecting GSM call from %s", state_name (b->state), number ? number : "?");
+		g_message ("Busy (%s) — rejecting GSM call from %s", bridge_state_name (b->state), number ? number : "?");
 		modem_call_hangup (b->modem, path);
 		return;
 	}
@@ -291,6 +356,7 @@ on_incoming_gsm (Bridge *b, const char *path, const char *number)
 	b->gsm_path = g_strdup (path);
 	b->gsm_caller = g_strdup (number);
 	b->gsm_terminated = b->gsm_hangup_requested = FALSE;
+	attempt_begin (b, TRUE, number);
 	g_autofree char *info = g_strdup_printf ("GSM call from %s", number && *number ? number : "anonymous");
 	set_state (b, BRIDGE_GSM_RINGING, info);
 	/* not answered yet: the SIP side goes first, and GSM is picked up only
@@ -423,7 +489,7 @@ on_sip_incoming (gpointer ud, SipCall *call)
 {
 	Bridge *b = ud;
 	if (b->state != BRIDGE_IDLE) {
-		g_message ("Busy (%s) — rejecting SIP call 486", state_name (b->state));
+		g_message ("Busy (%s) — rejecting SIP call 486", bridge_state_name (b->state));
 		sip_call_reject (call, 486, "Busy Here");
 		sip_client_remove_call (b->sip, call);
 		return;
@@ -445,6 +511,7 @@ on_sip_incoming (gpointer ud, SipCall *call)
 	b->sip_call = sip_call_ref (call);
 	call->user_data = b;
 	b->gsm_terminated = b->gsm_hangup_requested = FALSE;
+	attempt_begin (b, FALSE, dest);
 	g_autofree char *info = g_strdup_printf ("Dialing %s", dest);
 	set_state (b, BRIDGE_GSM_DIALING, info);
 	sip_call_ringing (call);
@@ -483,7 +550,7 @@ on_sip_rtp_ready (gpointer ud, SipCall *call)
 		if (start_rtp (b))
 			set_state (b, BRIDGE_BRIDGED, "inbound");
 	} else {
-		g_message ("RTP ready ignored in %s", state_name (b->state));
+		g_message ("RTP ready ignored in %s", bridge_state_name (b->state));
 	}
 }
 
@@ -560,6 +627,8 @@ on_sms_sent (gboolean ok, const char *error, gpointer ud)
 	r->reason = g_strdup (error);
 	r->at = gw_iso_utc (NULL);
 	g_message ("SMS %s to %s %s%s%s", r->id, r->to, r->event, error ? ": " : "", error ? error : "");
+	if (b->recents)
+		gw_recents_update_sms (b->recents, r->id, r->event, error);
 	g_free (j);
 	g_queue_push_tail (&b->reports, r);
 	reports_flush (b);
@@ -597,7 +666,20 @@ on_sip_message (gpointer ud, const SipMsg *msg, GPtrArray *extra)
 		target = sip_extract_user (sipmsg_header (msg, "to"));
 	if (target)
 		g_strstrip (target);
-	if (!target || !*target || !msg->body || !*msg->body) {
+	/* folded before anything measures or lists it, so the part count and
+	 * the log describe what actually goes out */
+	g_autofree char *body = NULL;
+	if (msg->body && *msg->body && b->sms_ascii) {
+		body = gw_sms_ascii_or_null (msg->body);
+		if (!body)
+			g_message ("SMS send: no ASCII spelling for this text — sending it unchanged as UCS-2");
+		else if (strcmp (body, msg->body))
+			g_message ("SMS send: transliterated to ASCII (%ld -> %ld chars)", g_utf8_strlen (msg->body, -1),
+				   (long)strlen (body));
+	}
+	if (!body)
+		body = g_strdup (msg->body);
+	if (!target || !*target || !body || !*body) {
 		g_message ("SMS send refused: missing recipient or body");
 		return 400;
 	}
@@ -610,7 +692,7 @@ on_sip_message (gpointer ud, const SipMsg *msg, GPtrArray *extra)
 	g_autofree char *id = hid && *hid ? g_strstrip (g_strdup (hid)) : gw_uuid_random ();
 	/* what it will cost, told before the server commits: one character
 	 * outside GSM-7 turns 160-character parts into 70-character ones */
-	GwSmsMeasure m = gw_sms_measure (msg->body);
+	GwSmsMeasure m = gw_sms_measure (body);
 	g_ptr_array_add (extra, g_strdup_printf ("X-SMS-Parts: %d", m.parts));
 	g_ptr_array_add (extra, g_strdup_printf ("X-SMS-Encoding: %s", m.encoding));
 	if (g_hash_table_contains (b->seen, id)) {
@@ -620,14 +702,17 @@ on_sip_message (gpointer ud, const SipMsg *msg, GPtrArray *extra)
 	}
 	remember_id (b, id);
 	g_message ("SMS send: %s to %s accepted (%ld chars, %d part(s), %s)", id, target,
-		   g_utf8_strlen (msg->body, -1), m.parts, m.encoding);
+		   g_utf8_strlen (body, -1), m.parts, m.encoding);
+	if (b->recents)
+		gw_recents_add_sms (b->recents, FALSE, target, g_get_real_time () / 1000, body, id, m.encoding, m.parts,
+				    "pending");
 	SendJob *j = g_new0 (SendJob, 1);
 	j->b = b;
 	j->id = g_strdup (id);
 	j->to = g_strdup (target);
 	j->encoding = g_strdup (m.encoding);
 	j->parts = m.parts;
-	modem_sms_send (b->modem, target, msg->body, on_sms_sent, j);
+	modem_sms_send (b->modem, target, body, on_sms_sent, j);
 	return 202;
 }
 
@@ -809,6 +894,13 @@ on_sms_received (gpointer ud, const char *path, const char *number, const char *
 	 * new message: the modem keeps the SMS until the server has taken it */
 	s->id = gw_sms_stable_id (number, ts, text);
 	s->parts = gw_sms_measure (text).parts;
+	if (b->recents) {
+		/* on arrival, not on forward: it happened whether or not the server
+		 * is reachable */
+		g_autoptr (GDateTime) at = ts ? g_date_time_new_from_iso8601 (ts, NULL) : NULL;
+		gint64 ms = at ? g_date_time_to_unix (at) * 1000 : g_get_real_time () / 1000;
+		gw_recents_add_sms (b->recents, TRUE, number, ms, text, s->id, NULL, s->parts, NULL);
+	}
 	g_queue_push_tail (&b->sms_out, s);
 	sms_flush (b);
 }
@@ -907,6 +999,7 @@ bridge_new (const BridgeConfig *cfg)
 {
 	Bridge *b = g_new0 (Bridge, 1);
 	b->own_number = gw_to_international (cfg->own_number);
+	b->sms_ascii = cfg->sms_ascii;
 	b->audio = cfg->audio;
 	b->cap_dev = g_strdup (cfg->audio.capture_dev);
 	b->pb_dev = g_strdup (cfg->audio.playback_dev);
@@ -937,6 +1030,65 @@ bridge_attach (Bridge *b, SipClient *sip, Modem *modem)
 }
 
 void
+bridge_set_recents (Bridge *b, GwRecents *recents)
+{
+	b->recents = recents;
+}
+
+void
+bridge_set_state_notify (Bridge *b, BridgeStateNotify fn, gpointer user_data)
+{
+	b->notify = fn;
+	b->notify_data = user_data;
+}
+
+const char *
+bridge_call_number (Bridge *b)
+{
+	return b->attempt_ms ? b->attempt_number : NULL;
+}
+
+gboolean
+bridge_call_incoming (Bridge *b)
+{
+	return b->attempt_incoming;
+}
+
+gint64
+bridge_call_bridged_at (Bridge *b)
+{
+	return b->bridged_us ? g_get_real_time () / 1000 - (g_get_monotonic_time () - b->bridged_us) / 1000 : 0;
+}
+
+gboolean
+bridge_hangup (Bridge *b)
+{
+	if (b->state == BRIDGE_IDLE || b->state == BRIDGE_TEARING_DOWN)
+		return FALSE;
+	tear_down (b, "Ended from the app", 480, "Temporarily Unavailable");
+	return TRUE;
+}
+
+void
+bridge_set_agent_muted (Bridge *b, gboolean muted)
+{
+	if (b->state == BRIDGE_IDLE || b->agent_muted == muted)
+		return;
+	b->agent_muted = muted;
+	if (b->rtp)
+		rtp_session_set_agent_muted (b->rtp, muted);
+	g_message ("%s", muted ? "Agent muted to the caller" : "Agent unmuted");
+	if (b->notify)
+		b->notify (b->state, NULL, b->notify_data);
+}
+
+gboolean
+bridge_agent_muted (Bridge *b)
+{
+	return b->agent_muted;
+}
+
+void
 bridge_shutdown (Bridge *b)
 {
 	tear_down (b, "Gateway stopping", 503, "Service Unavailable");
@@ -948,6 +1100,10 @@ bridge_free (Bridge *b)
 	if (!b)
 		return;
 	bridge_shutdown (b);
+	if (b->unmute) {
+		g_source_remove (b->unmute);
+		unmute_amps (b);
+	}
 	for (GList *l = b->timers; l; l = l->next)
 		g_source_remove (GPOINTER_TO_UINT (l->data));
 	g_list_free (b->timers);
@@ -958,6 +1114,7 @@ bridge_free (Bridge *b)
 	g_queue_clear_full (&b->seen_order, g_free);
 	g_hash_table_unref (b->seen);
 	g_free (b->own_number);
+	g_free (b->attempt_number);
 	g_free (b->cap_dev);
 	g_free (b->pb_dev);
 	g_free (b->ctl_card);

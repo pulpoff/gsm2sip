@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <!-- AdwApplication picks up style.css and icons/ under its base path on its own; dark.css is
+       main.c's (libadwaita 1.8 deprecates style-dark.css for media queries, which GTK 4.18 lacks) -->
+  <gresource prefix="/com/callagent/Gsm2sip">
+    <file>style.css</file>
+    <file>dark.css</file>
+    <file>com.callagent.Gsm2sip.png</file>
+    <file>icons/scalable/actions/gs-arrow-back-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-call-incoming-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-call-outgoing-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-copy-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-gear-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-globe-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-key-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-logs-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-phone-slash-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-shield-lock-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-trash-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-volume-high-symbolic.svg</file>
+    <file>icons/scalable/actions/gs-volume-xmark-symbolic.svg</file>
+  </gresource>
+</gresources>

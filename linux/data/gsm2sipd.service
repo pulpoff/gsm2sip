@@ -10,6 +10,9 @@ User=root
 ExecStart=/usr/sbin/gsm2sipd --config /etc/gsm2sip/gateway.conf
 Restart=on-failure
 RestartSec=5
+# the recent calls and messages the app lists
+StateDirectory=gsm2sip
+StateDirectoryMode=0700
 # media threads want their 20 ms on time
 Nice=-10
 

@@ -1,5 +1,5 @@
 project('gsm2sipd', 'c',
-  version: '1.4.16',
+  version: '1.4.17',
   license: 'MIT',
   meson_version: '>= 0.60',
   default_options: ['c_std=c11', 'warning_level=2', 'buildtype=release', 'prefix=/usr'])
@@ -24,10 +24,11 @@ if not srtp.found()
   warning('libsrtp2 not found: srtp=true is ignored, calls use plain RTP')
 endif
 
-core = files('src/sipmsg.c', 'src/g722.c', 'src/dsp.c', 'src/gwutil.c', 'src/stun.c', 'src/sipclient.c')
+core = files('src/sipmsg.c', 'src/g722.c', 'src/dsp.c', 'src/gwutil.c', 'src/stun.c', 'src/sipclient.c',
+  'src/recents.c')
 
 executable('gsm2sipd',
-  core + files('src/rtp.c', 'src/modem.c', 'src/bridge.c', 'src/main.c'),
+  core + files('src/rtp.c', 'src/modem.c', 'src/bridge.c', 'src/service.c', 'src/main.c'),
   c_args: srtp_args,
   dependencies: [glib, gio, gio_unix, alsa, srtp, libm],
   install: true,
@@ -35,6 +36,7 @@ executable('gsm2sipd',
 
 install_data('data/gsm2sipd.service', install_dir: get_option('prefix') / 'lib' / 'systemd' / 'system')
 install_data('data/gateway.conf.example', install_dir: get_option('sysconfdir') / 'gsm2sip')
+install_data('data/com.callagent.Gsm2sipd.conf', install_dir: get_option('datadir') / 'dbus-1' / 'system.d')
 
 # a cross build runs them only with an exe_wrapper (cross-arm64-qemu.ini)
 if get_option('tests') and meson.can_run_host_binaries()

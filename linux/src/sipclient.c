@@ -1,11 +1,16 @@
 #define G_LOG_DOMAIN "sip"
 #include "sipclient.h"
 #include "dsp.h"
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/random.h>
+#include <sys/timerfd.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <glib-unix.h>
+#include <time.h>
+#include <unistd.h>
 
 #define REGISTER_TIMEOUT_MS 10000
 #define MESSAGE_TIMEOUT_MS 10000
@@ -32,6 +37,17 @@ static struct {
 	gint64 delay_us, next_at;
 } backoff = { NULL, 15 * G_USEC_PER_SEC, 0 };
 
+/* Intervals here count the time the phone slept: a refresh due in 30 min is
+ * due 30 min later on the clock, not after 30 min awake.  The monotonic clock
+ * stops in suspend. */
+static gint64
+now_us (void)
+{
+	struct timespec ts;
+	clock_gettime (CLOCK_BOOTTIME, &ts);
+	return (gint64)ts.tv_sec * G_USEC_PER_SEC + ts.tv_nsec / 1000;
+}
+
 #define BACKOFF_MIN_US (15 * G_USEC_PER_SEC)
 #define BACKOFF_MAX_US (300 * G_USEC_PER_SEC)
 
@@ -44,7 +60,7 @@ backoff_hold (const char *server)
 		backoff.delay_us = BACKOFF_MIN_US;
 		backoff.next_at = 0;
 	}
-	return MAX (0, backoff.next_at - g_get_monotonic_time ());
+	return MAX (0, backoff.next_at - now_us ());
 }
 
 static void
@@ -59,7 +75,7 @@ backoff_failure (void)
 {
 	/* jittered so several gateways on one server do not retry in step */
 	gint64 wait = (gint64)(backoff.delay_us * g_random_double_range (0.8, 1.2));
-	backoff.next_at = g_get_monotonic_time () + wait;
+	backoff.next_at = now_us () + wait;
 	backoff.delay_us = MIN (backoff.delay_us * 2, BACKOFF_MAX_US);
 	return wait;
 }
@@ -90,6 +106,8 @@ struct SipClient {
 	char *call_id_base;
 	int cseq, reg_cseq;
 	guint reg_timer, monitor;
+	int alarm_fd;	/* wakes a sleeping phone for the next refresh */
+	guint alarm_src;
 	gint64 last_register, last_keepalive, reregister_us;
 	int register_failures;
 
@@ -118,8 +136,7 @@ struct SipClient {
 static void send_to (SipClient *c, const char *data, GSocketAddress *to);
 static void register_attempt (SipClient *c);
 static void tls_write_next (SipClient *c);
-
-static gint64 now_us (void) { return g_get_monotonic_time (); }
+static void alarm_arm (SipClient *c);
 
 static gboolean
 transport_open (SipClient *c)
@@ -855,6 +872,7 @@ register_done (SipClient *c, gboolean ok, const char *why)
 		c->register_failures = 0;
 		backoff_reset ();
 		g_message ("Registered with %s", c->server);
+		alarm_arm (c);
 		if (c->cb.registered)
 			c->cb.registered (c->ud);
 		return;
@@ -863,6 +881,7 @@ register_done (SipClient *c, gboolean ok, const char *why)
 	if (!c->running)
 		return;
 	gint64 wait = backoff_failure ();
+	alarm_arm (c);
 	c->register_failures++;
 	g_message ("REGISTER failed (%s) — next attempt in %" G_GINT64_FORMAT "s", why, wait / G_USEC_PER_SEC);
 	if (c->cb.registration_failed)
@@ -1631,11 +1650,52 @@ monitor_tick (gpointer data)
 	if (!c->tls && now - c->last_keepalive >= NAT_KEEPALIVE_US) {
 		send_to (c, "\r\n\r\n", NULL);
 		c->last_keepalive = now;
+		alarm_arm (c);
 	}
 	if (now - c->last_register > c->reregister_us && !c->registering) {
 		g_message ("Refreshing registration");
 		register_attempt (c);
 	}
+	return G_SOURCE_CONTINUE;
+}
+
+/* The 5 s monitor only runs while the phone is awake.  What it must do on
+ * time while the phone sleeps (the refresh, a UDP keepalive, a retry) gets an
+ * alarm that wakes the phone for it: CLOCK_BOOTTIME_ALARM, so root, or
+ * without the capability, an alarm that fires only while awake. */
+#define UNREGISTERED_RETRY_US (60 * G_USEC_PER_SEC)
+
+static void
+alarm_arm (SipClient *c)
+{
+	if (c->alarm_fd < 0)
+		return;
+	gint64 now = now_us (), due = 0;
+	if (c->running && c->registered) {
+		due = c->last_register + c->reregister_us;
+		if (!c->tls)
+			due = MIN (due, c->last_keepalive + NAT_KEEPALIVE_US);
+	} else if (c->running) {
+		due = backoff.next_at > now ? backoff.next_at : now + UNREGISTERED_RETRY_US;
+	}
+	struct itimerspec its = { 0 };
+	if (due) {
+		/* never in the past: an overdue refresh in flight would fire at once, forever */
+		due = MAX (due, now + G_USEC_PER_SEC);
+		its.it_value.tv_sec = due / G_USEC_PER_SEC;
+		its.it_value.tv_nsec = due % G_USEC_PER_SEC * 1000;
+	}
+	timerfd_settime (c->alarm_fd, TFD_TIMER_ABSTIME, &its, NULL);
+}
+
+static gboolean
+alarm_fired (gint fd, GIOCondition cond, gpointer data)
+{
+	(void)cond;
+	guint64 n;
+	if (read (fd, &n, sizeof n) == sizeof n)
+		monitor_tick (data);
+	alarm_arm (data);
 	return G_SOURCE_CONTINUE;
 }
 
@@ -1670,6 +1730,7 @@ sip_client_new (const SipConfig *cfg, const SipClientCallbacks *cb, gpointer ud)
 	c->bctx.codec_mode = c->codec;
 	c->cancel = g_cancellable_new ();
 	c->cseq = 1;
+	c->alarm_fd = -1;
 	c->reregister_us = REREGISTER_US;
 	c->open_backoff = OPEN_BACKOFF_MIN_US;
 	c->last_open_attempt = G_MININT64 / 2;
@@ -1705,6 +1766,16 @@ sip_client_start (SipClient *c)
 	reset_call_id_base (c);
 	maybe_open_transport (c);
 	c->monitor = g_timeout_add_seconds (POLL_INTERVAL_S, monitor_tick, c);
+	c->alarm_fd = timerfd_create (CLOCK_BOOTTIME_ALARM, TFD_CLOEXEC | TFD_NONBLOCK);
+	if (c->alarm_fd < 0) {
+		g_message ("No wake alarm (%s): registration refreshes wait for the phone to be awake",
+			   g_strerror (errno));
+		c->alarm_fd = timerfd_create (CLOCK_BOOTTIME, TFD_CLOEXEC | TFD_NONBLOCK);
+	}
+	if (c->alarm_fd >= 0) {
+		c->alarm_src = g_unix_fd_add (c->alarm_fd, G_IO_IN, alarm_fired, c);
+		alarm_arm (c);
+	}
 }
 
 void
@@ -1717,6 +1788,14 @@ sip_client_stop (SipClient *c)
 	if (c->monitor) {
 		g_source_remove (c->monitor);
 		c->monitor = 0;
+	}
+	if (c->alarm_src) {
+		g_source_remove (c->alarm_src);
+		c->alarm_src = 0;
+	}
+	if (c->alarm_fd >= 0) {
+		close (c->alarm_fd);
+		c->alarm_fd = -1;
 	}
 	GList *calls = g_hash_table_get_values (c->calls);
 	for (GList *l = calls; l; l = l->next)

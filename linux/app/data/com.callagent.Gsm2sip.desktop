@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=gsm2sip
+Comment=GSM to SIP gateway: calls and SMS for a SIP server
+Exec=gsm2sip
+Icon=com.callagent.Gsm2sip
+Terminal=false
+Categories=Network;Telephony;
+Keywords=gateway;SIP;GSM;SMS;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;

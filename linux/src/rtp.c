@@ -45,8 +45,7 @@ typedef struct {
 struct RtpSession {
 	int fd, port;
 	RtpAudioConfig ac;
-	char *cap_dev, *pb_dev, *ctl_card, *uplink, *active, *mute;
-	GArray *muted;		/* MutedControl: what to put back */
+	char *cap_dev, *pb_dev, *ctl_card, *uplink, *active;
 	RtpCallbacks cb;
 	gpointer ud;
 
@@ -65,6 +64,7 @@ struct RtpSession {
 	GThread *tx, *rx, *play;
 	atomic_bool running;
 	atomic_bool audio_up;	/* cap and pb are open (or never will be) */
+	atomic_bool agent_muted;
 
 	GMutex jlock;
 	GCond jcond;
@@ -96,6 +96,13 @@ rms (const int16_t *p, int n)
 }
 
 /* ---- setup ---- */
+
+double
+rtp_agent_volume_factor (int step)
+{
+	static const double f[] = { 0.40, 0.55, 0.75, 1.0, 1.4, 2.0, 2.8 };
+	return f[CLAMP (step, -3, 3) + 3];
+}
 
 RtpSession *
 rtp_session_new (GError **err)
@@ -239,17 +246,22 @@ typedef struct {
  * The S10e plays the call's downlink on its earpiece whatever the uplink
  * carries: the far end's voice comes out of the gateway, and through its mics
  * back to the far end. Hold the controls listed in "mute" at their minimum
- * while the call audio is open; on = FALSE puts back what they were.
+ * for the call; on = FALSE puts back what they were.  The bridge does it for
+ * the whole GSM call, not the session: the network's ringback and its
+ * announcements come down before the call is up and the session opens.
  */
-static void
-mute_controls (RtpSession *s, gboolean on)
+static GArray *amps_muted;	/* MutedControl: what to put back */
+
+void
+rtp_mute_amps (const RtpAudioConfig *ac, gboolean on)
 {
-	if (on ? !s->mute || !*s->mute : !s->muted)
+	if (on ? !ac->mute || !*ac->mute || amps_muted : !amps_muted)
 		return;
+	const char *card = ac->control_card ? ac->control_card : "hw:0";
 	snd_ctl_t *ctl = NULL;
-	int r = snd_ctl_open (&ctl, s->ctl_card, 0);
+	int r = snd_ctl_open (&ctl, card, 0);
 	if (r < 0) {
-		g_warning ("%s: %s", s->ctl_card, snd_strerror (r));
+		g_warning ("%s: %s", card, snd_strerror (r));
 		return;
 	}
 	snd_ctl_elem_id_t *id = NULL;
@@ -260,8 +272,8 @@ mute_controls (RtpSession *s, gboolean on)
 	snd_ctl_elem_value_malloc (&v);
 	snd_ctl_elem_id_set_interface (id, SND_CTL_ELEM_IFACE_MIXER);
 	if (on) {
-		g_auto (GStrv) names = g_strsplit (s->mute, ",", -1);
-		s->muted = g_array_new (FALSE, FALSE, sizeof (MutedControl));
+		g_auto (GStrv) names = g_strsplit (ac->mute, ",", -1);
+		amps_muted = g_array_new (FALSE, FALSE, sizeof (MutedControl));
 		for (int i = 0; names[i]; i++) {
 			const char *name = g_strstrip (names[i]);
 			if (!*name)
@@ -270,7 +282,7 @@ mute_controls (RtpSession *s, gboolean on)
 			snd_ctl_elem_info_set_id (info, id);
 			if ((r = snd_ctl_elem_info (ctl, info)) < 0 ||
 			    snd_ctl_elem_info_get_type (info) != SND_CTL_ELEM_TYPE_INTEGER) {
-				g_warning ("ALSA control '%s' on %s: %s", name, s->ctl_card,
+				g_warning ("ALSA control '%s' on %s: %s", name, card,
 					   r < 0 ? snd_strerror (r) : "not an integer");
 				continue;
 			}
@@ -286,12 +298,12 @@ mute_controls (RtpSession *s, gboolean on)
 				g_free (m.name);
 				continue;
 			}
-			g_array_append_val (s->muted, m);
+			g_array_append_val (amps_muted, m);
 			g_message ("'%s' %ld -> %ld for the call", name, m.value, min);
 		}
 	} else {
-		for (guint i = 0; i < s->muted->len; i++) {
-			MutedControl *m = &g_array_index (s->muted, MutedControl, i);
+		for (guint i = 0; i < amps_muted->len; i++) {
+			MutedControl *m = &g_array_index (amps_muted, MutedControl, i);
 			snd_ctl_elem_id_set_name (id, m->name);
 			snd_ctl_elem_info_set_id (info, id);
 			snd_ctl_elem_value_set_id (v, id);
@@ -303,8 +315,8 @@ mute_controls (RtpSession *s, gboolean on)
 			}
 			g_free (m->name);
 		}
-		g_array_free (s->muted, TRUE);
-		s->muted = NULL;
+		g_array_free (amps_muted, TRUE);
+		amps_muted = NULL;
 	}
 	snd_ctl_elem_value_free (v);
 	snd_ctl_elem_info_free (info);
@@ -465,11 +477,9 @@ open_audio (RtpSession *s)
 					       ac->playback_channels, ac->playback_rate) : NULL;
 		if (s->pb)
 			uplink_switch (s, TRUE);
-		if (s->cap || s->pb)
-			mute_controls (s, TRUE);
-		g_message ("Call audio: capture %s, playback %s (channel %d, %+d dB, %d-bit, stretch %d)",
+		g_message ("Call audio: capture %s, playback %s (channel %d, %+d dB, agent volume %+d, %d-bit, stretch %d)",
 			   s->cap ? s->cap_dev : "OFF (silence)", s->pb ? s->pb_dev : "OFF",
-			   s->ac.playback_channel, s->ac.playback_gain_db, s->ac.playback_width,
+			   s->ac.playback_channel, s->ac.playback_gain_db, s->ac.agent_volume, s->ac.playback_width,
 			   s->ac.playback_stretch);
 	}
 	atomic_store (&s->audio_up, true);
@@ -724,7 +734,8 @@ play_thread (gpointer data)
 	int64_t peak = ((int64_t)1 << (s->ac.playback_width - 1)) - 1;
 	/* Q16; the uplink is a mic input with its own gain, and a line-level
 	 * voice there clips */
-	int64_t gain = (int64_t)lround (65536.0 * pow (10.0, s->ac.playback_gain_db / 20.0));
+	int64_t gain = (int64_t)lround (65536.0 * pow (10.0, s->ac.playback_gain_db / 20.0) *
+				       rtp_agent_volume_factor (s->ac.agent_volume));
 	/* A sink that reads a 4 ch frame as two 2 ch ones at twice the rate:
 	 * stretch 2 resamples to rate x 2 and puts consecutive samples in
 	 * the frame's channel groups ([a0 a0 a1 a1]), which a real 4 ch
@@ -833,6 +844,8 @@ play_thread (gpointer data)
 		}
 
 render:
+		if (atomic_load (&s->agent_muted))
+			memset (out, 0, sizeof (int16_t) * n);
 		/* DTMF from the SIP side, in band: cpd has no +VTS, so the tone
 		 * replaces the far end's audio for as long as it sounds */
 		g_mutex_lock (&s->lock);
@@ -915,13 +928,12 @@ rtp_session_start (RtpSession *s, const RtpAudioConfig *ac, const char *remote_i
 	s->ctl_card = g_strdup (ac->control_card ? ac->control_card : "hw:0");
 	s->uplink = g_strdup (ac->uplink_switch);
 	s->active = g_strdup (ac->call_active);
-	s->mute = g_strdup (ac->mute);
 	s->ac.capture_dev = s->cap_dev;
 	s->ac.playback_dev = s->pb_dev;
 	s->ac.control_card = s->ctl_card;
 	s->ac.uplink_switch = s->uplink;
 	s->ac.call_active = s->active;
-	s->ac.mute = s->mute;
+	s->ac.mute = NULL;	/* the bridge's: rtp_mute_amps */
 	s->pt = pt == PT_PCMU || pt == PT_PCMA ? pt : PT_G722;
 	s->te_pt = te_pt > 0 ? te_pt : PT_TELEPHONE_EVENT;
 	if (cb)
@@ -940,6 +952,12 @@ rtp_session_start (RtpSession *s, const RtpAudioConfig *ac, const char *remote_i
 	s->tx = g_thread_new ("rtp-tx", tx_thread, s);
 	s->stats_timer = g_timeout_add_seconds (5, stats_tick, s);
 	return TRUE;
+}
+
+void
+rtp_session_set_agent_muted (RtpSession *s, gboolean muted)
+{
+	atomic_store (&s->agent_muted, muted);
 }
 
 void
@@ -980,7 +998,6 @@ rtp_session_free (RtpSession *s)
 	}
 	if (s->cap)
 		snd_pcm_close (s->cap);
-	mute_controls (s, FALSE);
 #ifdef HAVE_SRTP
 	if (s->tx_srtp)
 		srtp_dealloc (s->tx_srtp);
@@ -996,6 +1013,5 @@ rtp_session_free (RtpSession *s)
 	g_free (s->ctl_card);
 	g_free (s->uplink);
 	g_free (s->active);
-	g_free (s->mute);
 	g_free (s);
 }

@@ -17,7 +17,7 @@ the app needs no change.
   by the modem, and reported back (`X-SMS-Event: submitted` / `failed`).
 
 Signalling is the app's, byte for byte where it matters: the same REGISTER,
-digest auth, User-Agent (`gsm2sip v1.4.15 <hostname>`), SDP, `X-SMS-*`
+digest auth, User-Agent (`gsm2sip v1.4.17 <hostname>`), SDP, `X-SMS-*`
 headers, status codes and retry rules. G.722 by default, G.711 A-law/µ-law
 when configured, SDES-SRTP over TLS, DTMF from SIP as RFC 4733 events or
 SIP INFO, STUN for the public address.
@@ -39,7 +39,10 @@ modem is ModemManager over D-Bus, the call audio is two ALSA PCMs.
 | `src/dsp.[ch]` | resamplers, G.711, RFC 4733, the DTMF tone generator |
 | `src/g722.[ch]` | G.722 (G722Codec.kt) |
 | `src/stun.[ch]` | STUN binding requests (StunClient.kt) |
-| `src/gwutil.[ch]` | number and SMS helpers, ids, timestamps |
+| `src/gwutil.[ch]` | number and SMS helpers, ids, timestamps, the ASCII fold (Transliterate.kt) |
+| `src/recents.[ch]` | the recent calls and messages (CallLogStore.kt), in `/var/lib/gsm2sip/recents` |
+| `src/service.[ch]` | the D-Bus interface the app talks to |
+| `app/` | the GNOME app (C, GTK 4, libadwaita): the Android app's screens |
 | `tests/test_main.c` | unit tests (no modem, ALSA or network needed) |
 | `tools/conf-from-android-xml.py` | the app's settings → `gateway.conf` |
 
@@ -103,13 +106,54 @@ journalctl -u gsm2sipd -f
 ```
 
 `SIGUSR1` re-registers at once (after the network came back, say);
+`SIGHUP` takes up an edited `gateway.conf` (once no call is up);
 `SIGTERM` ends any call on both legs before the daemon exits. `-v` logs the
 first line of every SIP message.
 
-**Turn the phone's own dialler off first.** GNOME Calls (and callaudiod)
-see the same ModemManager calls the gateway does: left running, they ring
-the phone, may answer, and switch the call audio routing under the
-gateway. In gateway mode the phone is not a phone.
+**The phone's own dialler has to be off while the gateway runs.** GNOME
+Calls (and callaudiod) see the same ModemManager calls the gateway does:
+left running, they ring the phone, may answer, and switch the call audio
+routing under the gateway; Chatty takes the SMS off the modem. The app's
+Enabled switch does this both ways (below). By hand it is
+`systemctl --user mask --now calls-daemon.service sm.puri.Chatty-daemon.service`,
+and `unmask` + `start` to get the phone back.
+
+## The app and the D-Bus interface
+
+`app/` is the GNOME app, the Android app's Home, Settings and Logs screens.
+It runs as the phone's user and talks to the daemon over the system bus:
+`com.callagent.Gsm2sipd`, object `/com/callagent/Gsm2sipd`, interface
+`com.callagent.Gsm2sipd1`. Only root and the `dialout` group (the phone's
+user on Mobian) may call it — `data/com.callagent.Gsm2sipd.conf` goes in
+`/usr/share/dbus-1/system.d/`. The SIP password is write-only: nothing on
+the bus carries it back out.
+
+| | |
+|---|---|
+| properties | `Version`, `Enabled`, `State` (`unconfigured` `disabled` `connecting` `registered` `failed`), `OnlineSince`, `Server`, `User`, `CallState` (the bridge's, lower case), `CallInfo`, `CallNumber`, `CallIncoming`, `CallBridgedAt` (ms), `AgentMuted`, `RestartPending` |
+| methods | `GetRecents` → `aa{sv}` (newest first, Android's keys), `ClearRecents`, `GetLog` → `as`, `ClearLog`, `GetConfig` → `a{sv}` (`has_password`, never the password), `SetConfig(a{sv})`, `SetEnabled(b)`, `Reconnect`, `Hangup`, `SetAgentMuted(b)` |
+| signals | `RecentsChanged`, `LogLines(as)` |
+
+`SetConfig` and `SetEnabled` rewrite `gateway.conf` (mode 600) and restart
+the daemon in place (a re-exec, same PID) — a call in progress is not
+dropped for `SetConfig`, the restart waits for it; switching off ends it.
+
+**Enabled** (`[gateway] enabled`, default true): off, the daemon runs but
+leaves the modem alone, so the phone's own apps take its calls and SMS. The
+app hands those apps the modem back when it switches the gateway off, and
+masks and stops them before switching it on. Without a complete `[sip]`
+section the daemon also waits, `unconfigured`, for the app's settings.
+
+## Sleep
+
+A gateway must hear the SIP server while the phone sleeps. Where the Wi-Fi
+can wake the phone (the device's `power/wakeup` in sysfs reads `enabled`;
+on the S10e, brcmfmac with `host_wake=gpa0:7`), the daemon lets it sleep:
+an INVITE, a MESSAGE or the server's OPTIONS wakes it, and so does a GSM
+call or SMS. Elsewhere it holds a logind `sleep` block inhibitor while the
+gateway is on, so the phone stays up; it looks again every 30 s. Its SIP
+timers run on `CLOCK_BOOTTIME`, and the next re-REGISTER (or UDP keepalive,
+or retry) has a `CLOCK_BOOTTIME_ALARM` timer that wakes the phone for it.
 
 ## Call audio on the S10e
 
@@ -149,5 +193,5 @@ changed.
 - **One modem, one call.** A second GSM call while one is bridged is
   rejected busy; dual-SIM is not handled.
 - **Not ported from the app**: the Android audio-HAL workarounds, the call
-  monitor and snoop features, SMS transliteration, the on-disk SMS store,
-  and calls placed from the phone's own dialler.
+  monitor and snoop features, the on-disk SMS store, and calls placed from
+  the phone's own dialler.
