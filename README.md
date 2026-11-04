@@ -20,7 +20,23 @@ A dedicated rooted Android phone with a local SIM card acts as a SIP-to-GSM gate
 - **Outbound**: the SIP server sends an INVITE with an `X-GSM-Forward: +<number>` header → the phone dials that number over GSM → audio is bridged back to SIP
 - **SMS**: messages arriving on any SIM are forwarded to the server as SIP MESSAGE, and the server can ask the gateway to send one and be told what became of it — see [SMS over SIP](#sms-over-sip)
 
-Audio flows through shared speaker/mic — both GSM and SIP audio run concurrently on the same hardware, enabled by a Magisk module that disables Android's audio concurrency restrictions.
+The call audio never goes through the phone's speaker or microphone.  On every
+supported phone the agent is put into the call, and the caller read out of it,
+digitally, inside the modem or the audio DSP, while the phone itself stays
+silent.  Four chip families do it, each in its own way:
+
+| Chip family | Verified on | Agent → caller | Caller → agent |
+|---|---|---|---|
+| Qualcomm | Poco X3 NFC (SM6150/SM7150), Galaxy S4 Mini (MSM8960) | `incall_music` into the modem uplink | `VOICE_DOWNLINK`, `VOC_REC_*` |
+| Samsung Exynos | Galaxy S10e (Exynos 9820) | played into the ABOX DSP in place of the mic | tapped off the ABOX downlink |
+| MediaTek | Ulefone Metal (MT6753) | the modem's background-sound player | `VOICE_DOWNLINK` |
+| Google Tensor | Pixel 7 (gs201) | `incall playback` → Telephony Tx | the AoC telephony-rx PCM, over root |
+
+The S10e was listed here as impossible for a long time: its audio HAL has no
+telephony path at all.  It now works by going past the HAL, straight to the
+DSP — see [The Galaxy S10e](#the-galaxy-s10e-past-the-hal-through-the-abox).
+The Magisk module makes the app a privileged system app, grants what it needs
+on a headless phone, and ships the root tools and the S10e's kernel module.
 
 ## Audio Codec
 
@@ -207,13 +223,30 @@ back to the HAL, which on this phone means no call audio).
 
 ## Requirements
 
-- **Device**: Qualcomm-based Android phone with Magisk root, on LineageOS or the
-  stock ROM (developed against a Poco X3 NFC; verified on LineageOS and MIUI 14),
-  or a Galaxy S10e on LineageOS
+- **Device**: one of the [supported devices](#supported-devices), or another
+  Qualcomm phone (see [Choosing a device](#choosing-a-device)), with Magisk root
 - **SIM**: SIM card with voice plan
 - **Network**: Stable WiFi connection
 - **Power**: Always connected to charger
 - **Build host**: Linux with JDK 17+
+
+## What's new in 1.4.18
+
+- **The Galaxy S10e works**, the phone this README used to call impossible: its
+  audio HAL has no telephony path, so the gateway now drives the ABOX DSP
+  directly. Both call directions are digital and the phone's own earpiece,
+  speaker and mics are off for the call. On LineageOS 23.2, with the
+  `abox_pos.ko` the Magisk module loads.
+  See [The Galaxy S10e](#the-galaxy-s10e-past-the-hal-through-the-abox).
+- **Four chip families**: Qualcomm, Samsung Exynos, MediaTek and Google Tensor.
+- **New devices from contributors:**
+  - Google Pixel 7 (Tensor G2), on LineageOS 24 / Android 17 (#27, @flamingspaz).
+  - MediaTek MT6735/MT6753, tested on a Ulefone Metal (#26, @dolezsa).
+- **SMS:** a MESSAGE retransmitted over UDP is sent once, not once per copy,
+  when the server sends no `X-SMS-Id` (#30).
+- **Wi-Fi calling** shows as such in the network badge instead of `?` (#31).
+- **gsm2sipd**, the gateway as a Linux daemon for phones running Mobian, now
+  has a GNOME app: see [linux/](linux/README.md).
 
 ## What's new in 1.4.14
 
