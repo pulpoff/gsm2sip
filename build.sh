@@ -133,32 +133,32 @@ build_apk() {
 
 # ── Build Magisk module ─────────────────────────────
 
-# Build one tinymix for one ABI.  $1 = GOARCH, $2 = expected `file` signature,
-# $3 = output path.
-build_tinymix_arch() {
-    local GOARCH_="$1" SIG="$2" OUT="$3"
-    local TINYMIX_SRC="$SCRIPT_DIR/tools/tinymix"
+# Build one Go tool (tools/<name>) for one ABI.  $1 = tool name,
+# $2 = GOARCH, $3 = expected `file` signature, $4 = output path.
+build_tool_arch() {
+    local NAME="$1" GOARCH_="$2" SIG="$3" OUT="$4"
+    local SRC="$SCRIPT_DIR/tools/$NAME"
 
     # A pre-built binary of the right architecture is good enough
     if [ -f "$OUT" ] && file "$OUT" 2>/dev/null | grep -q "$SIG"; then
-        echo "Using existing tinymix: $OUT"
+        echo "Using existing $NAME: $OUT"
         return 0
     fi
 
-    if command -v go &>/dev/null && [ -f "$TINYMIX_SRC/main.go" ]; then
-        echo "Building tinymix for $GOARCH_..."
-        (cd "$TINYMIX_SRC" && GOOS=linux GOARCH="$GOARCH_" GOARM=7 CGO_ENABLED=0 \
+    if command -v go &>/dev/null && [ -f "$SRC/main.go" ]; then
+        echo "Building $NAME for $GOARCH_..."
+        (cd "$SRC" && GOOS=linux GOARCH="$GOARCH_" GOARM=7 CGO_ENABLED=0 \
             go build -ldflags='-s -w' -o "$OUT" .)
         if [ -f "$OUT" ]; then
             chmod 755 "$OUT"
-            echo "tinymix built: $OUT ($(du -h "$OUT" | cut -f1))"
+            echo "$NAME built: $OUT ($(du -h "$OUT" | cut -f1))"
             return 0
         fi
     fi
 
-    echo "WARNING: could not build tinymix for $GOARCH_ — mixer controls will"
-    echo "         not work on $GOARCH_ devices.  Install Go, or drop a"
-    echo "         pre-built binary at: $OUT"
+    echo "WARNING: could not build $NAME for $GOARCH_ — it will be missing on"
+    echo "         $GOARCH_ devices.  Install Go, or drop a pre-built binary at:"
+    echo "         $OUT"
     return 1
 }
 
@@ -171,8 +171,31 @@ build_tinymix() {
     # that contain `long`: an arm64 binary talks a different ioctl ABI than an
     # armeabi-v7a one, and neither works on the other's kernel.  install.sh
     # picks the matching one at flash time.
-    build_tinymix_arch arm64 "ARM aarch64" "$SCRIPT_DIR/magisk/tinymix"
-    build_tinymix_arch arm   "ELF 32-bit.*ARM" "$SCRIPT_DIR/magisk/tinymix32"
+    build_tool_arch tinymix arm64 "ARM aarch64" "$SCRIPT_DIR/magisk/tinymix"
+    build_tool_arch tinymix arm   "ELF 32-bit.*ARM" "$SCRIPT_DIR/magisk/tinymix32"
+}
+
+build_tinypcm() {
+    echo ""
+    echo "=== Building tinypcm (static, one per ABI) ==="
+    echo ""
+    build_tool_arch tinypcm arm64 "ARM aarch64" "$SCRIPT_DIR/magisk/tinypcm"
+    build_tool_arch tinypcm arm   "ELF 32-bit.*ARM" "$SCRIPT_DIR/magisk/tinypcm32"
+}
+
+# abox_pos.ko needs the S10e kernel tree to build (tools/abox-pos/build.sh), so
+# a prebuilt copy lives in magisk/ like tinycap; a fresh build replaces it.
+copy_abox_pos() {
+    local KO="$SCRIPT_DIR/tools/abox-pos/abox_pos.ko"
+    if [ -f "$KO" ]; then
+        cp "$KO" "$SCRIPT_DIR/magisk/abox_pos.ko"
+        echo "Included abox_pos.ko from tools/abox-pos ($(du -h "$KO" | cut -f1))"
+    elif [ -f "$SCRIPT_DIR/magisk/abox_pos.ko" ]; then
+        echo "Using prebuilt magisk/abox_pos.ko"
+    else
+        echo "WARNING: no abox_pos.ko — the S10e (Exynos 9820) will have no call"
+        echo "         audio path.  Build it with tools/abox-pos/build.sh."
+    fi
 }
 
 build_magisk() {
@@ -182,6 +205,8 @@ build_magisk() {
 
     # Build tinymix binary for ABOX mixer control (required on Samsung Exynos)
     build_tinymix
+    build_tinypcm
+    copy_abox_pos
 
     # Copy the APK into the Magisk module as a system priv-app.
     # This makes the app a privileged system app, enabling permissions

@@ -195,17 +195,27 @@ silence_messages && log -t "$TAG" "Silenced notifications: $MSGS"
 # never runs, never sets MODE_FOREGROUND, and appops stay as set.
 #
 # Kill any instance that might have started before module mounted.
-killall com.google.android.permissioncontroller 2>/dev/null
-killall com.android.permissioncontroller 2>/dev/null
-
-# Verify PermissionController is actually gone
-if pm list packages 2>/dev/null | grep -q permissioncontroller; then
-    log -t "$TAG" "WARNING: PermissionController still visible to pm!"
-    # Fallback: force-disable it
-    pm disable com.android.permissioncontroller 2>/dev/null
-    pm disable com.google.android.permissioncontroller 2>/dev/null
+#
+# Not on the Exynos 9820: its call audio comes straight off the DSP through
+# tinypcm, never through AudioRecord, so RECORD_AUDIO does not matter there.
+# And PermissionController lives in an APEX on its LineageOS, out of the
+# overlay's reach, so the fallback below would disable it outright — taking
+# the "default phone app" dialog the gateway is set up with along with it.
+if [ "$(getprop ro.hardware 2>/dev/null)" = "exynos9820" ]; then
+    log -t "$TAG" "PermissionController: left alone (Exynos 9820 does not record through AudioFlinger)"
 else
-    log -t "$TAG" "PermissionController: hidden by Magisk overlay"
+    killall com.google.android.permissioncontroller 2>/dev/null
+    killall com.android.permissioncontroller 2>/dev/null
+
+    # Verify PermissionController is actually gone
+    if pm list packages 2>/dev/null | grep -q permissioncontroller; then
+        log -t "$TAG" "WARNING: PermissionController still visible to pm!"
+        # Fallback: force-disable it
+        pm disable com.android.permissioncontroller 2>/dev/null
+        pm disable com.google.android.permissioncontroller 2>/dev/null
+    else
+        log -t "$TAG" "PermissionController: hidden by Magisk overlay"
+    fi
 fi
 
 # ── Force-allow RECORD_AUDIO via appops ───────────────
@@ -284,6 +294,47 @@ if [ -n "$TINYCAP_SRC" ]; then
     log -t "$TAG" "tinycap: installed $TINYCAP_SRC to /data/local/tmp/tinycap"
 else
     log -t "$TAG" "tinycap: none available for ABI=$DEVICE_ABI — PCM probe will be skipped"
+fi
+
+# ── Ensure tinypcm is available ───────────────────────
+# tinypcm streams raw PCM between the app and ALSA devices the audio HAL does
+# not expose — the Exynos 9820's ABOX call path is reached that way.  One per
+# ABI for the same ioctl reason as tinymix.
+case "$DEVICE_ABI" in
+    arm64*|aarch64*) TINYPCM_SRC="$MODDIR/tinypcm" ;;
+    arm*)            TINYPCM_SRC="$MODDIR/tinypcm32" ;;
+    *)               TINYPCM_SRC="" ;;
+esac
+if [ -n "$TINYPCM_SRC" ] && [ -f "$TINYPCM_SRC" ]; then
+    cp "$TINYPCM_SRC" /data/local/tmp/tinypcm
+    chmod 755 /data/local/tmp/tinypcm
+    chown root:root /data/local/tmp/tinypcm
+    log -t "$TAG" "tinypcm: installed $DEVICE_ABI binary to /data/local/tmp/tinypcm"
+else
+    log -t "$TAG" "tinypcm: no bundled build for ABI=$DEVICE_ABI"
+fi
+
+# ── ABOX DMA positions (Exynos 9820) ──────────────────
+# The ABOX firmware reports no period positions for the DMAs the gateway's
+# call path uses (RDMA8 into the uplink, WDMA5/6 out of it), so a PCM on them
+# never moves.  abox_pos.ko reads the positions off the DMA status registers
+# and reports them in the firmware's place.  Built against the LineageOS S10e
+# kernel; it checks the vendor driver's layout at load and refuses a kernel it
+# does not match, so loading it is safe — the app falls back to the HAL then.
+# Loaded here so a refusal shows in the boot log, and again by the app if a
+# reboot was skipped.
+# ro.hardware, not ro.board.platform: LineageOS sets the latter to
+# "universal9820" on the S10e.
+if [ "$(getprop ro.hardware 2>/dev/null)" = "exynos9820" ] && [ -f "$MODDIR/abox_pos.ko" ]; then
+    cp "$MODDIR/abox_pos.ko" /data/local/tmp/abox_pos.ko
+    chmod 644 /data/local/tmp/abox_pos.ko
+    if [ -d /sys/module/abox_pos ]; then
+        log -t "$TAG" "abox_pos: already loaded"
+    elif OUT=$(insmod /data/local/tmp/abox_pos.ko rdma=0x100 wdma=0x60 2>&1); then
+        log -t "$TAG" "abox_pos: loaded"
+    else
+        log -t "$TAG" "abox_pos: NOT loaded ($OUT; dmesg has the reason) — no gateway audio path"
+    fi
 fi
 
 # ── Log ALSA card info for diagnostics ────────────────

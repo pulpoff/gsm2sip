@@ -102,6 +102,11 @@ data class DeviceProfile(
      *  capture is running even though the ones set on MultiMedia1/4/8 stay On. */
     val mixerCaptureCmd: String = "",
 
+    /** Carry the call over raw ALSA PCMs opened as root, not AudioRecord and
+     *  AudioTrack.  For a device whose HAL cannot reach the call audio at all;
+     *  null everywhere else.  See [RootPcmRoute]. */
+    val rootPcm: RootPcmRoute? = null,
+
 
     /** Readback of the handful of controls this SoC's bridge depends on.
      *  Logged before and after [mixerSetupCmd] so a failed setup is visible in
@@ -686,130 +691,135 @@ data class DeviceProfile(
             appopsPropagationMs = 500,
         )
 
-        /** Samsung Galaxy S10e (Exynos 9820 / Cirrus Logic CS47L93 Madera codec)
+        /** Samsung Galaxy S10e (Exynos 9820), LineageOS: both directions digital,
+         *  inside the ABOX DSP, through PCMs the audio HAL never opens.
          *
-         *  Audio HAL: Samsung audio_hw_proxy (ABOX DSP)
-         *  ALSA cards:
-         *    0: beyondmadera (CS47L93 Madera + ALL ABOX controls, 1267 total)
-         *    1: aboxvdma (ABOX Virtual DMA — ZERO mixer controls!)
-         *    2: aboxdump (debug)
+         *  The HAL offers nothing to work with — no telephony device in its
+         *  audio policy, no incall_music, no in-call capture — so the bridge
+         *  bypasses it and drives ABOX's own routing (card 0, all controls
+         *  "ABOX ..."):
          *
-         *  ABOX routing during voice call (v2.8.40-41 diagnostics):
-         *    NSRC0=UAIF0(8) Bridge=On  — mic/codec → modem TX
-         *    NSRC1=UAIF0(8) Bridge=On  — mic/codec → modem TX (redundant)
-         *    NSRC2=SIFS0     Bridge=Off — playback mixer (not bridged)
-         *    SIFS1 → UAIF1 → CS35L41 speaker amp (speaker playback)
-         *    RDMA0 → VPCMOUT_DAI0 (modem downlink playback)
-         *    VPCMIN_DAI0 → WDMA1 (modem uplink capture)
-         *    ABOX Sound Type=VOICE, Audio Mode=IN_CALL
+         *    agent:  RDMA8 -> SPUS OUT8 -> SIFS2 -> NSRC0/NSRC1 -> VSS uplink.
+         *            NSRC0/1 carry the microphone (UAIF0) in a stock call;
+         *            pointing them at SIFS2 replaces it, so the room never
+         *            reaches the caller and nothing needs muting.
+         *    caller: SIFS0, the call's playback mix (downlink + media), ->
+         *            NSRC5 -> WDMA6.
          *
-         *  UAIF interfaces:
-         *    UAIF0 = CODEC (Madera CS47L93) — mic/codec I2S
-         *    UAIF1 = Speaker AMP (CS35L41)  — speaker playback
-         *    UAIF2 = FM Radio, UAIF3 = Bluetooth
+         *  Three things this depends on, each found the hard way:
+         *    - SIFS2 runs at 24 bit, the format NSRC1 gets from UAIF0.  The VSS
+         *      resampler behind NSRC1 is configured for that when the call
+         *      starts and is not reconfigured when its source changes; 16-bit
+         *      audio came out as a buzz.
+         *    - A SIFS is only clocked while a capture stream runs through it, so
+         *      WDMA5 (NSRC4 = SIFS2) runs alongside the agent's playback as a
+         *      pacer.
+         *    - The ABOX firmware reports no position for WDMA5/6, so the vendor
+         *      driver never moves those streams; the abox_pos kernel module
+         *      (tools/abox-pos, loaded by the Magisk module) reports for it.
          *
-         *  v2.8.42 TX injection strategy — NSRC bridge rerouting:
-         *    Reroute NSRC0 from UAIF0 (mic) to SIFS0 (playback mixer).
-         *    Bridge is already On (set by telephony HAL), so the bridged
-         *    audio source changes from mic to AudioTrack playback.
-         *    AudioTrack uses USAGE_MEDIA (routes through SPUS → SIFS0).
-         *    This replaces physical mic with SIP agent audio in modem TX.
-         *    v2.8.42 confirmed: caller heard audio (overdriven loud noise).
-         *    Enum names work: 'SIFS0' sets correctly, 'UAIF0' restores.
-         *
-         *  v2.8.43-44: Only rerouted NSRC0 — caller silent (modem uses NSRC1).
-         *  v2.8.45: Reroute NSRC0+NSRC1→SIFS0 (both to playback mixer).
-         *    SIFS0=AudioTrack only (no modem downlink → no feedback).
-         *    v2.8.42 noise was NSRC1→SIFS1 (speaker=modem downlink feedback).
-         */
+         *  Do not mute the microphone through Android here: the HAL mutes the
+         *  whole VSS uplink for that, the agent included. */
+        /** The S10e's own earpiece, speaker and mics, off for a bridged call
+         *  and back to the values the HAL's mixer paths use. */
+        private const val S10E_MICS = "IN1L IN1R IN2L IN2R IN3L IN3R IN4L IN4R"
+        private const val S10E_LOCAL_MUTE =
+            "tinymix 'Left AMP Mute' Muted; tinymix 'Right AMP Mute' Muted; " +
+            "for i in $S10E_MICS; do tinymix \"\$i Digital Volume\" 0; done"
+        private const val S10E_LOCAL_UNMUTE =
+            "tinymix 'Left AMP Mute' Unmuted; tinymix 'Right AMP Mute' Unmuted; " +
+            "for i in $S10E_MICS; do tinymix \"\$i Digital Volume\" 128; done"
+
         fun exynos9820() = DeviceProfile(
-            name = "Exynos 9820 (S10e)",
-            // ABOX mixer controls — exact names from /vendor/etc/mixer_paths.xml.
-            // The control names are CASE SENSITIVE — "Bridge" not "BRIDGE".
-            // ALL ABOX controls are on card 0 (default) — no -D flag needed.
-            // v2.8.49: Attempted speaker mute via CS35L41/Madera/ABOX controls.
-            // v2.8.50: SPK_SCAN confirmed NO speaker amp controls exist on this
-            // LineageOS firmware.  Only HPOUT* (headphone) volumes are exposed.
-            // ABOX UAIF1 SPK=RESERVED disconnected the speaker amp I2S bus which
-            // KILLED the entire voice path (caller heard nothing).  The CS35L41
-            // amp is controlled through missing kernel control (ABOX Spk AmpL Power).
-            // No ALSA-level speaker mute is possible on this firmware.
-            // Keep discovery-only scan for diagnostics.
-            mixerSetupCmd = buildString {
-                append("echo 'SPK_SCAN:'; tinymix 2>&1 | grep -iE '(spk|speaker|amp.*(switch|gain|vol)|out[1-6][lr].*(switch|vol))' | head -20")
-            },
-            // Restore NSRC0 and NSRC1 to UAIF0 (mic/codec → modem TX) on call end.
-            // v2.8.42 confirmed enum names work — 'SIFS0' sets correctly.
+            name = "Exynos 9820 (S10e, ABOX)",
+            rootPcm = RootPcmRoute(
+                card = 0,
+                playDevice = 8,       // RDMA8
+                pacerDevice = 17,     // WDMA5
+                captureDevice = 18,   // WDMA6
+                setupCmd = buildString {
+                    append("[ -d /sys/module/abox_pos ] || insmod /data/local/tmp/abox_pos.ko; ")
+                    append("echo 0x100 > /sys/module/abox_pos/parameters/rdma; ")
+                    append("echo 0x60 > /sys/module/abox_pos/parameters/wdma; ")
+                    append("tinymix 'ABOX SIFS2 Width' 24 >/dev/null; ")
+                    append("tinymix 'ABOX SPUS OUT8' SIFS2 >/dev/null; ")
+                    append("tinymix 'ABOX SIFS2' 'SPUS OUT8' >/dev/null; ")
+                    append("tinymix 'ABOX NSRC4' SIFS2 >/dev/null; ")
+                    append("tinymix 'ABOX NSRC5' SIFS0 >/dev/null; ")
+                    append("echo -n 'abox_pos='; [ -d /sys/module/abox_pos ] && echo loaded || echo MISSING")
+                },
+                // The agent replaces the mic in the uplink, and the phone itself
+                // goes quiet: both amps (Left is the earpiece, Right the
+                // speaker) muted the way the HAL's spk-amp-mute path does it,
+                // and the mic inputs turned down to -64 dB.  None of that is
+                // in the gateway's path — the downlink is tapped at SIFS0,
+                // before the codec, and NSRC0/1 no longer read the codec.
+                connectCmd = buildString {
+                    append("tinymix 'ABOX NSRC0' SIFS2; tinymix 'ABOX NSRC1' SIFS2; ")
+                    append(S10E_LOCAL_MUTE)
+                },
+                // Only what is still ours: when the call ends first the HAL has
+                // already put NSRC0/1 back to RESERVED, and that must stand.
+                // The tap comes off SIFS0 before its capture stops, because a
+                // consumer that stops stalls every other one on the same SIFS.
+                disconnectCmd = buildString {
+                    append("for n in NSRC0 NSRC1; do ")
+                    append("tinymix \"ABOX \$n\" | grep -q SIFS2 && tinymix \"ABOX \$n\" UAIF0; done; ")
+                    append("tinymix 'ABOX NSRC5' RESERVED; ")
+                    append(S10E_LOCAL_UNMUTE)
+                },
+                teardownCmd = buildString {
+                    append("tinymix 'ABOX NSRC4' RESERVED; ")
+                    append("tinymix 'ABOX SPUS OUT8' SIFS0; ")
+                    append("tinymix 'ABOX SIFS2' 'SPUS OUT6'; ")
+                    append("tinymix 'ABOX SIFS2 Width' 16")
+                },
+            ),
+            // The routing lives in rootPcm, around the streams it serves.
+            mixerSetupCmd = "",
+            // At call end: hand the call its own audio back, and undo the rest
+            // only once no stream of ours is left on it — RtpSession tears down
+            // on its own thread and may not have got there yet.
             mixerRestoreCmd = buildString {
-                append("tinymix 'ABOX NSRC0' 'UAIF0' 2>/dev/null; ")
-                append("tinymix 'ABOX NSRC1' 'UAIF0' 2>/dev/null")
+                append("for n in NSRC0 NSRC1; do ")
+                append("tinymix \"ABOX \$n\" | grep -q SIFS2 && tinymix \"ABOX \$n\" UAIF0; done; ")
+                append(S10E_LOCAL_UNMUTE).append("; ")
+                append("pgrep -f 'tinypcm play' >/dev/null || { ")
+                append("tinymix 'ABOX NSRC5' RESERVED; tinymix 'ABOX NSRC4' RESERVED; ")
+                append("tinymix 'ABOX SPUS OUT8' SIFS0; tinymix 'ABOX SIFS2' 'SPUS OUT6'; ")
+                append("tinymix 'ABOX SIFS2 Width' 16; }")
             },
-            // NSRC bridge rerouting: change NSRC0+NSRC1 source from UAIF0 (mic)
-            // to SIFS0 (playback mixer).  Bridge is already On (set by HAL),
-            // so this injects AudioTrack audio into modem TX.
-            // v2.8.42: NSRC0→SIFS0 + NSRC1→SIFS1 = loud noise (SIFS1 has modem
-            //   downlink via speaker path → feedback loop).
-            // v2.8.43-44: NSRC0→SIFS0 only = silent (modem reads NSRC1, not NSRC0).
-            // v2.8.45: NSRC0+NSRC1→SIFS0 = clean injection, no feedback.
-            //   SIFS0 has only playback mixer (AudioTrack), NOT modem downlink
-            //   (which goes through SIFS1→UAIF1→speaker amp).
-            mixerIncallMusicCmd = buildString {
-                // Reroute NSRC0+NSRC1 → SIFS0 (playback mixer → modem TX bridge)
-                append("tinymix 'ABOX NSRC0' 'SIFS0' 2>/dev/null; ")
-                append("tinymix 'ABOX NSRC1' 'SIFS0' 2>/dev/null; ")
-                append("sleep 0.1; ")
-                // Verify readback
-                append("echo 'NSRC_REROUTE:'; ")
-                append("echo -n 'NSRC0='; tinymix 'ABOX NSRC0' 2>/dev/null; ")
-                append("echo -n 'NSRC1='; tinymix 'ABOX NSRC1' 2>/dev/null; ")
-                append("echo -n 'NSRC0_Bridge='; tinymix 'ABOX NSRC0 Bridge' 2>/dev/null; ")
-                append("echo -n 'NSRC1_Bridge='; tinymix 'ABOX NSRC1 Bridge' 2>/dev/null")
-            },
-            // NSRC/bridge state — the controls the TX injection depends on.
-            // These names exist only on Samsung's ABOX DSP; on any other SoC
-            // tinymix answers "control not found", which is why this readback
-            // belongs to the profile rather than the shared call path.
+            mixerIncallMusicCmd = "",
             mixerVerifyCmd = buildString {
                 append("echo -n 'NSRC0='; tinymix 'ABOX NSRC0' 2>&1; ")
                 append("echo -n 'NSRC1='; tinymix 'ABOX NSRC1' 2>&1; ")
-                append("echo -n 'NSRC0B='; tinymix 'ABOX NSRC0 Bridge' 2>&1; ")
-                append("echo -n 'NSRC1B='; tinymix 'ABOX NSRC1 Bridge' 2>&1; ")
-                append("echo -n 'NSRC2B='; tinymix 'ABOX NSRC2 Bridge' 2>&1; ")
-                append("echo -n 'SPUS0='; tinymix 'ABOX SPUS OUT0' 2>&1")
+                append("echo -n 'NSRC4='; tinymix 'ABOX NSRC4' 2>&1; ")
+                append("echo -n 'NSRC5='; tinymix 'ABOX NSRC5' 2>&1; ")
+                append("echo -n 'OUT8='; tinymix 'ABOX SPUS OUT8' 2>&1; ")
+                append("echo -n 'SIFS2W='; tinymix 'ABOX SIFS2 Width' 2>&1; ")
+                append("echo -n 'AMP='; tinymix 'Left AMP Mute' 2>&1; tinymix 'Right AMP Mute' 2>&1; ")
+                append("echo -n 'MIC='; tinymix 'IN1L Digital Volume' 2>&1")
             },
-            // Deliberately NOT set: there is nothing on this device to route
-            // to.  Checked on the hardware — /vendor/etc/audio_policy_configuration.xml
-            // declares three mixPorts (deep, fast, primary) and contains no
-            // telephony device at all, and audio.primary.universal9820.so has
-            // no TELEPHONY_TX, no incall_rec usecases and no voice_extn
-            // call_state/vsid handling.  Against SM6150, where
-            // incall_music_uplink -> Telephony Tx is what carries injected
-            // audio into the modem, this device simply has no equivalent.
-            // Neither direction can be done digitally here; that is why the
-            // gateway moved to a Qualcomm device.
-            musicVolPercent = 40,  // v2.8.45@30%+2x=audible but quiet. Raise for clarity.
-            captureGain = 10,      // VOICE_RECOGNITION captures very quietly (rawCapRMS~2)
-            playbackGain = 2,      // 40%+2x = moderate, SIFS0 only = no feedback
-            noiseGateThreshold = 20,  // Lower gate: VOICE_RECOGNITION raw level is ~2-50
+            musicVolPercent = 40,
+            // Digital end to end: passed through untouched, as on the S4 Mini.
+            captureGain = 1,
+            playbackGain = 1,
+            noiseGateThreshold = 0,
             echoGateThreshold = 300,
             doubleTalkRatio = 1.5f,
-            // Speaker mode REQUIRED for capture on this device.  In earpiece
-            // mode, ALL AudioRecord sources return rawCapRMS=0.
-            requireSpeakerMode = true,
-            // Samsung incall_music HAL param.  Set via enableIncallMusic()
-            // AFTER capture is established (not in configureAudioBridge).
-            // This gives AudioRecord time to lock onto its PCM device before
-            // the HAL re-routes for incall_music.
-            incallMusicParam = "incall_music_enabled",
-            voiceDownlinkWorks = true,
-            voiceCallVolPercent = 0,   // Minimum — vol=12 caused acoustic echo
-            // USAGE_MEDIA: Routes through SPUS → SIFS0/SIFS1 (normal playback).
-            // NSRC bridge rerouting captures from SIFS into modem TX.
-            // v2.8.41 proved USAGE_VOICE_COMMUNICATION does NOT inject into
-            // modem TX — HAL ignores it.  USAGE_MEDIA is correct because we
-            // need audio on SIFS where the rerouted NSRC bridge can capture it.
-            playbackUsage = -1,  // default = USAGE_MEDIA
-            routeChangeDelayMs = 500,
+            // The agent goes to SIFS2 and the caller is read off SIFS0; the two
+            // never meet.
+            playbackLeaksIntoCapture = false,
+            silenceFallback = false,
+            playbackFadeIn = false,
+            requireSpeakerMode = false,
+            incallMusicParam = "",
+            voiceDownlinkWorks = false,
+            // The firmware applies the call volume ("ABOX Speech Volume") to
+            // the downlink before SIFS0, so this sets the level the agent
+            // hears.  The minimum the other profiles use would starve it.
+            voiceCallVolPercent = 70,
+            routeChangeDelayMs = 0,
             appopsPropagationMs = 300,
         )
 
@@ -1152,3 +1162,34 @@ data class DeviceProfile(
         )
     }
 }
+
+/**
+ * Call audio through two PCMs the audio HAL never opens, streamed by tinypcm
+ * running as root (installed to /data/local/tmp by the Magisk module).
+ *
+ * The commands run through [RootShell], with tinymix resolved as for the
+ * other mixer commands, in this order around one RTP session:
+ * [setupCmd], the PCMs open, [connectCmd] ... [disconnectCmd], the PCMs
+ * close, [teardownCmd].  Each is safe to run twice.
+ */
+data class RootPcmRoute(
+    val card: Int,
+    /** Playback PCM the agent is written to. */
+    val playDevice: Int,
+    /** Capture PCM run alongside playback and discarded, for a path that is
+     *  only clocked while something captures through it; -1 for none. */
+    val pacerDevice: Int = -1,
+    /** Capture PCM the caller is read from. */
+    val captureDevice: Int,
+    /** Channels the PCMs are opened with.  The pipe is always mono. */
+    val channels: Int = 2,
+    /** Routes the PCMs need to exist at all: a PCM with nothing behind it
+     *  fails to prepare. */
+    val setupCmd: String,
+    /** Once both stream: give the call our audio instead of its own. */
+    val connectCmd: String,
+    /** Before they close: give the call its own audio back. */
+    val disconnectCmd: String,
+    /** After: undo the rest of [setupCmd]. */
+    val teardownCmd: String,
+)

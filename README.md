@@ -44,7 +44,7 @@ remote actually offered rather than failing a call over a preference.
 | Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **fully working** on LineageOS and MIUI 14 |
 | Samsung Galaxy S4 Mini (`serranolte`) | Qualcomm MSM8960, WCD9304 | digital, via `incall_music` | digital, via `VOC_REC_*` | **fully working** |
 | Google Pixel 4a (`sunfish`) | Qualcomm SM7150 | — | — | contributed support; not verified here |
-| Samsung Galaxy S10e | Exynos 9820, CS47L93 | no path | no path | not usable |
+| Samsung Galaxy S10e (`beyond0lte`) | Exynos 9820, CS47L93 | digital, played into the ABOX in place of the mic | digital, tapped off the ABOX downlink | **working** on LineageOS 23.2, with `abox_pos.ko` |
 
 **The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
 both directions, entirely through the modem, with the handset's own microphone
@@ -93,7 +93,7 @@ What has actually been checked so far:
 | Poco X3 NFC | SM6150/SM7150 | Xiaomi MIUI 14 and LineageOS | fully working, verified on live calls |
 | Galaxy S4 Mini | MSM8960 | LineageOS 16 | fully working, verified on a live call |
 | Pixel 4a | SM7150 | Google | recognised by the check, used by a contributor |
-| Galaxy S10e | Exynos 9820 | — | no path in either direction |
+| Galaxy S10e | Exynos 9820 | LineageOS 23.2 | working with `abox_pos.ko`, verified on a live call |
 
 Everything the working profile depends on is generic Qualcomm audio, so other
 Qualcomm phones are plausible candidates — but the deciding factors live in the
@@ -116,18 +116,46 @@ stays `CALL_INACTIVE`, so `VOICE_CALL`, `VOICE_DOWNLINK` and the `VOC_REC_*`
 mixers all return silence.  The app announces the call itself
 (`vsid=<hex>;call_state=2`) before opening `AudioRecord`.
 
-The Exynos S10e has no equivalent, and this was confirmed on the hardware
-rather than inferred: `audio_policy_configuration.xml` declares three mixPorts
-(`deep`, `fast`, `primary`) and no telephony device, and
-`audio.primary.universal9820.so` contains no `TELEPHONY_TX`, no `incall_rec`
-usecases and no `voice_extn` `call_state`/`vsid` handling.  There is nothing to
-inject into and nothing to capture from, so neither direction can be digital.
-That is why the gateway moved to a Qualcomm device.
+### The Galaxy S10e: past the HAL, through the ABOX
+
+The S10e's audio HAL has no telephony path at all:
+`audio_policy_configuration.xml` declares three mixPorts (`deep`, `fast`,
+`primary`) and no telephony device, and `audio.primary.universal9820.so` has
+no `TELEPHONY_TX`, no `incall_rec` usecases and no `call_state`/`vsid`
+handling.  Through Android there is nothing to inject into and nothing to
+capture from.
+
+The call itself runs in the ABOX DSP, though, and its routing is all mixer
+controls.  The gateway leaves the HAL out and drives the ABOX directly:
+
+- **Agent → caller:** the agent plays into RDMA8, which is routed onto SIFS2,
+  and the voice processor's two uplink inputs (`ABOX NSRC0`/`NSRC1`) are
+  switched from the codec (`UAIF0`) to SIFS2.  The agent replaces the
+  microphone inside the DSP.  SIFS2 has to be 24-bit, the width the voice
+  processor's resampler expects from the codec; at 16 it buzzes.
+- **Caller → agent:** `ABOX NSRC5` taps SIFS0, where the downlink leaves the
+  voice processor, into WDMA6.  The call volume is applied before that
+  point, so the profile keeps it at 70%.
+- **The phone itself** is silent for the call: both amps muted, the mic
+  inputs turned down.  Neither is in the gateway's path.
+- **Muting the mic through Android must not happen here**: the HAL mutes the
+  whole voice uplink, the agent with it.
+
+Both PCMs run at the call's codec rate (the ABOX converts), streamed by
+`tools/tinypcm` as root.  The catch is that the calliope firmware never
+reports a position for WDMA5-7, nor for RDMA6 during a call, so on a stock
+kernel those PCMs time out after a second.  `tools/abox-pos` is a small
+kernel module that reports the positions in the firmware's place; the
+Magisk module loads it at boot.  It is built against the LineageOS 4.14
+kernel and loads on every build of it: the layout it depends on is checked
+at load, and a kernel that does not match is refused (the app then falls
+back to the HAL, which on this phone means no call audio).
 
 ## Requirements
 
 - **Device**: Qualcomm-based Android phone with Magisk root, on LineageOS or the
-  stock ROM (developed against a Poco X3 NFC; verified on LineageOS and MIUI 14)
+  stock ROM (developed against a Poco X3 NFC; verified on LineageOS and MIUI 14),
+  or a Galaxy S10e on LineageOS
 - **SIM**: SIM card with voice plan
 - **Network**: Stable WiFi connection
 - **Power**: Always connected to charger
