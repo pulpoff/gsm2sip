@@ -35,6 +35,7 @@ import com.callagent.gateway.net.StunClient
 import com.callagent.gateway.sip.SipClient
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -679,7 +680,14 @@ class GatewayService : Service() {
             return 503 to emptyList()
         }
 
+        // Without an X-SMS-Id, key the message on its SIP transaction instead
+        // of minting a fresh id.  Over UDP a MESSAGE whose 202 is slow to
+        // arrive is retransmitted (0.5 s, 1 s, 2 s...) with the same Call-ID
+        // and CSeq; a fresh id per copy made every retransmission a new SMS —
+        // three texts arrived as seven from a phone on Wi-Fi power save.
         val id = msg.header("x-sms-id")?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: msg.callId?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { callId -> "sip-" + UUID.nameUUIDFromBytes("$callId ${msg.cseq}".toByteArray()) }
             ?: SmsStore.newId()
         // What this message will actually cost, answered in the 202 rather
         // than after the fact: one character outside GSM-7 forces the whole
