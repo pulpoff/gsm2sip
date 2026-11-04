@@ -1,0 +1,2 @@
+obj-m := abox_pos.o
+ccflags-y := -I$(srctree)/sound/soc/samsung/abox
