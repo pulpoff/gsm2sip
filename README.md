@@ -45,6 +45,7 @@ remote actually offered rather than failing a call over a preference.
 | Samsung Galaxy S4 Mini (`serranolte`) | Qualcomm MSM8960, WCD9304 | digital, via `incall_music` | digital, via `VOC_REC_*` | **fully working** |
 | Google Pixel 4a (`sunfish`) | Qualcomm SM7150 | — | — | contributed support; not verified here |
 | Ulefone Metal (`metal`) | MediaTek MT6753 (MT6735 family) | digital, via the modem's background-sound player | digital, via `VOICE_DOWNLINK` | working on madOS 8.1 (Android 8.1); verified on live calls, see [MediaTek](#mediatek-mt6735mt6753) |
+| Google Pixel 7 (`panther`) | Google Tensor G2 (gs201), AoC audio DSP | digital, via `incall playback` → `Telephony Tx` | digital, via `tinycap` on the AoC telephony-rx PCM (root) | **working** on LineageOS 24 (Android 17), verified on live VoLTE calls |
 | Samsung Galaxy S10e (`beyond0lte`) | Exynos 9820, CS47L93 | digital, played into the ABOX in place of the mic | digital, tapped off the ABOX downlink | **working** on LineageOS 23.2, with `abox_pos.ko` |
 
 **The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
@@ -61,6 +62,20 @@ where LineageOS reports the platform, which is why matching by board name alone
 was not enough.  Phones on other chips — the Snapdragon 720G (SM7125) in the
 Redmi Note 9 Pro / Poco M2 Pro, for one — fall back to the generic profile until
 one is tested.
+
+**The Pixel 7 is the first non-Qualcomm phone that works.**  Tensor's SoC is
+Samsung-derived, but its audio runs on Google's own AoC DSP, whose audio policy
+has the telephony routes the Exynos S10e lacks — the ones Call Screen uses.
+Injection goes through the policy like on Qualcomm (`incall playback` →
+`Telephony Tx`, stereo, `incall_music` set before the track exists).  Capture
+does not: every AudioRecord route lands on the AoC's `incall-capture1`
+stream, which reads exact zeros, so the profile reads the caller straight from
+the telephony-rx PCM (`Incall Capture Stream0` = DL, pcm20, 48 kHz) with
+`tinycap` over root and decimates it to 16 kHz.  `Incall Mic Mute` and
+`Incall Sink Mute` take the handset out of the call without cutting the
+injected audio.  On Android 17, privileged apps run in the `priv_app_36`
+SELinux domain, which Magisk 31.1 does not yet let reach its socket — the
+module carries a `sepolicy.rule` for it, without which the app has no root.
 
 **The Galaxy S4 Mini works fully too**, which is worth dwelling on because it
 is a 2013 handset on LineageOS 16 (Android 9) and armeabi-v7a — and because its
@@ -129,6 +144,7 @@ What has actually been checked so far:
 | Poco X3 NFC | SM6150/SM7150 | Xiaomi MIUI 14 and LineageOS | fully working, verified on live calls |
 | Galaxy S4 Mini | MSM8960 | LineageOS 16 | fully working, verified on a live call |
 | Pixel 4a | SM7150 | Google | recognised by the check, used by a contributor |
+| Pixel 7 | Tensor G2 (gs201) | LineageOS 24 | fully working, verified on live VoLTE calls (both directions digital, SMS both ways) |
 | Galaxy S10e | Exynos 9820 | LineageOS 23.2 | working with `abox_pos.ko`, verified on a live call |
 
 Everything the working profile depends on is generic Qualcomm audio, so other
