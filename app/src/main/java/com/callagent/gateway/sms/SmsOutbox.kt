@@ -109,7 +109,7 @@ object SmsOutbox {
     }
 
     private fun read(context: Context): List<OutboundSms> {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         return (0 until arr.length()).mapNotNull { i ->
             runCatching { fromJson(arr.getJSONObject(i)) }.getOrNull()
@@ -119,7 +119,7 @@ object SmsOutbox {
     private fun write(context: Context, list: List<OutboundSms>) {
         val arr = JSONArray()
         list.forEach { arr.put(toJson(it)) }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        com.callagent.gateway.Storage.prefs(context, PREFS)
             .edit().putString(KEY, arr.toString()).commit()
     }
 

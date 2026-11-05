@@ -29,7 +29,7 @@ class BootReceiver : BroadcastReceiver() {
             // here gives extra lead time on cold boot before any call arrives.
             earlyPermissionSetup(context)
 
-            val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+            val prefs = com.callagent.gateway.Storage.prefs(context)
             if (!prefs.getBoolean("autoconnect", true)) {
                 Log.i(TAG, "Autoconnect disabled, skipping")
                 return

@@ -430,7 +430,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun autoStartGateway() {
         if (running) return
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         if (!prefs.getBoolean("autoconnect", true)) return
         val server = prefs.getString("server", "") ?: ""
         val user = prefs.getString("user", "") ?: ""
@@ -555,7 +555,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openConfigView() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         findViewById<EditText>(R.id.etCfgServer).setText(prefs.getString("server", "callagent.pro"))
         findViewById<EditText>(R.id.etCfgPort).setText(prefs.getInt("port", 5060).toString())
         findViewById<EditText>(R.id.etCfgUser).setText(prefs.getString("user", ""))
@@ -691,7 +691,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Server and username are required", Toast.LENGTH_LONG).show()
             return
         }
-        getSharedPreferences("gateway", MODE_PRIVATE).edit()
+        com.callagent.gateway.Storage.prefs(this).edit()
             .putString("server", server)
             .putInt("port", port)
             .putString("user", user)
@@ -778,7 +778,7 @@ class MainActivity : AppCompatActivity() {
         // so it is shown whenever TLS is switched on, not only while
         // registered.  It reads from prefs each time because the setting can
         // change under the Activity while it is alive.
-        val cfg = getSharedPreferences("gateway", MODE_PRIVATE)
+        val cfg = com.callagent.gateway.Storage.prefs(this)
         val tlsOn = cfg.getBoolean("sip_tls", false)
         tvHomeTlsBadge.visibility = if (tlsOn) View.VISIBLE else View.GONE
 
@@ -795,7 +795,7 @@ class MainActivity : AppCompatActivity() {
             homeCallCard.visibility = View.VISIBLE
             val number = com.callagent.gateway.gsm.GsmCallManager.currentNumber ?: info
             tvHomeCallFrom.text = number
-            val dest = getSharedPreferences("gateway", MODE_PRIVATE)
+            val dest = com.callagent.gateway.Storage.prefs(this)
                 .getString("own_number", "") ?: ""
             tvHomeCallTo.text = if (dest.isNotEmpty()) "Connected to $dest" else "Connected"
             // Inbound is the normal direction for a gateway; a dialler-initiated
@@ -950,7 +950,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showSmsDetails(entry: CallLogEntry) {
         val outgoing = entry.direction != "IN"
-        val own = getSharedPreferences("gateway", MODE_PRIVATE)
+        val own = com.callagent.gateway.Storage.prefs(this)
             .getString("own_number", "").orEmpty()
 
         // A message still in flight has fresher paperwork in the outbox.
@@ -1075,7 +1075,7 @@ class MainActivity : AppCompatActivity() {
 
                 append("\n— reachability —\n")
                 if (gw.isNotEmpty()) append("Router  : ${pingAvg(gw)}\n")
-                val server = getSharedPreferences("gateway", MODE_PRIVATE)
+                val server = com.callagent.gateway.Storage.prefs(this)
                     .getString("server", "") ?: ""
                 if (server.isNotEmpty()) append("SIP srv : ${pingAvg(server)}  ($server)\n")
             }
@@ -1764,7 +1764,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun refreshMonitorBadge() {
         if (!::tvHomeMonitorBadge.isInitialized) return
-        val on = getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("call_monitor", false)
+        val on = com.callagent.gateway.Storage.prefs(this).getBoolean("call_monitor", false)
         val tint = ContextCompat.getColor(this, if (on) R.color.monitor_badge else R.color.text_secondary)
         androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(
             tvHomeMonitorBadge, ColorStateList.valueOf(tint)
@@ -1776,7 +1776,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Badge tap: flip Call monitor, and take the call in progress with it. */
     private fun toggleCallMonitor() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val on = !prefs.getBoolean("call_monitor", false)
         prefs.edit().putBoolean("call_monitor", on).apply()
         // Here, not in refreshMonitorBadge: that runs on every status update
@@ -1854,7 +1854,7 @@ class MainActivity : AppCompatActivity() {
     // ── Gateway Control ──────────────────────────────────
 
     private fun startGateway() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val server = prefs.getString("server", "") ?: ""
         val port = prefs.getInt("port", 5060)
         val user = prefs.getString("user", "") ?: ""
@@ -1885,7 +1885,7 @@ class MainActivity : AppCompatActivity() {
         // Call monitor: the service has already switched Snoop on for this
         // call (CallOrchestrator), so the button has to say Off from the start.
         if (callLive && !wasLive &&
-            getSharedPreferences("gateway", MODE_PRIVATE).getBoolean("call_monitor", false)) {
+            com.callagent.gateway.Storage.prefs(this).getBoolean("call_monitor", false)) {
             monitoring = true
         }
         updateMonitorButtons()

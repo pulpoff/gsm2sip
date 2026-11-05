@@ -66,7 +66,7 @@ object CallLogStore {
     // appended would otherwise drop one of the two writes.
     @Synchronized
     fun addEntry(context: Context, entry: CallLogEntry) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         val obj = JSONObject().apply {
             put("dir", entry.direction)
@@ -91,7 +91,7 @@ object CallLogStore {
 
     fun getEntries(context: Context): List<CallLogEntry> {
         cachedEntries?.let { return it }
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         val entries = (0 until arr.length()).map { i ->
             val obj = arr.getJSONObject(i)
@@ -129,7 +129,7 @@ object CallLogStore {
         transform: (CallLogEntry) -> CallLogEntry
     ): Boolean {
         if (smsId.isEmpty()) return false
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         // Newest last in storage, and a repeated id is always the latest one.
         for (i in arr.length() - 1 downTo 0) {
@@ -181,7 +181,7 @@ object CallLogStore {
     }
 
     fun clear(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        com.callagent.gateway.Storage.prefs(context, PREFS)
             .edit().putString(KEY, "[]").apply()
         cachedEntries = null // invalidate cache
     }

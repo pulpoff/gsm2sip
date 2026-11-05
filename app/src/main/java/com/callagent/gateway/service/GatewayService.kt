@@ -483,7 +483,7 @@ class GatewayService : Service() {
      * nothing until the next restart.
      */
     private fun applyConfigChange() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         // Battery protection is independent of SIP validity, so refresh it
         // before checking whether the SIP fields are complete.
         // Re-post first, so toggling the status bar setting takes effect now
@@ -606,7 +606,7 @@ class GatewayService : Service() {
      * can map an SMS to an assistant exactly as it maps a call.
      */
     private fun sendSmsOverSip(sip: SipClient, sms: PendingSms): Int {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val configuredOwn = ownNumberForSub(sms.subId)
         val target = sms.to.ifEmpty { configuredOwn }.ifEmpty { cfgUser }
         val targetUri = "sip:$target@$cfgServer"
@@ -659,7 +659,7 @@ class GatewayService : Service() {
         // Hebrew or Arabic message that would have arrived intact into a row
         // of '?', so it is sent through unchanged even with the setting on.
         val rawText = msg.body
-        val foldToAscii = getSharedPreferences("gateway", MODE_PRIVATE)
+        val foldToAscii = com.callagent.gateway.Storage.prefs(this)
             .getBoolean("translit_ascii", false)
         val folded =
             if (foldToAscii) com.callagent.gateway.sms.Transliterate.toAsciiOrNull(rawText) else null
@@ -897,7 +897,7 @@ class GatewayService : Service() {
      * single legacy value whenever the SIM cannot be resolved.
      */
     private fun ownNumberForSub(subId: Int): String {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val fallback = prefs.getString("own_number", "")?.trim().orEmpty()
         if (subId < 0) return fallback
         val slot = runCatching {
@@ -959,7 +959,7 @@ class GatewayService : Service() {
             broadcastLog("SMS report $event for ${sms.id} deferred — not registered")
             return false
         }
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val own = ownNumberForSub(sms.subId).ifEmpty { cfgUser }
         val body = org.json.JSONObject().apply {
             put("id", sms.id)
@@ -1090,7 +1090,7 @@ class GatewayService : Service() {
         currentCallStart = 0L
         currentAttemptStart = 0L
 
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "callagent.pro") ?: ""
         val port = intent?.getIntExtra(EXTRA_PORT, 5060) ?: prefs.getInt("port", 5060)
         val username = intent?.getStringExtra(EXTRA_USER) ?: prefs.getString("user", "") ?: ""
@@ -1196,7 +1196,7 @@ class GatewayService : Service() {
         // SIP server on the same network needs no public address at all —
         // advertising one there would point the server at the far side of a
         // NAT it never has to cross.
-        val useStun = getSharedPreferences("gateway", MODE_PRIVATE)
+        val useStun = com.callagent.gateway.Storage.prefs(this)
             .getBoolean("use_stun", true)
         val stunResult = if (!useStun) null else try {
             StunClient.discover(network = activeNetwork)
@@ -1223,7 +1223,7 @@ class GatewayService : Service() {
         // TLS protects signalling only: REGISTER, INVITE and the SMS bodies
         // in MESSAGE.  RTP is deliberately left alone, so call audio is no
         // more or less private than it was on UDP.
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val useTls = prefs.getBoolean("sip_tls", false)
         if (useTls) broadcastLog("SIP transport: TLS to $cfgServer:$cfgPort")
 
