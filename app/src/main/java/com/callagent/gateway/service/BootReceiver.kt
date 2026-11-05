@@ -19,10 +19,18 @@ import com.callagent.gateway.RootShell
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+        if (intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
+            intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
         ) {
-            Log.i(TAG, "Boot/update received, checking config...")
+            Log.i(TAG, "${intent.action} received, checking config...")
+            val locked = intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED
+            if (!locked) com.callagent.gateway.Storage.migrate(context)
+            if (intent.action == Intent.ACTION_BOOT_COMPLETED && GatewayService.running) {
+                // Already started at LOCKED_BOOT_COMPLETED, before the unlock.
+                Log.i(TAG, "Gateway already running since locked boot — nothing to do")
+                return
+            }
 
             // Pre-grant RECORD_AUDIO at earliest boot moment.
             // GatewayService.startGateway() also grants it, but doing it
@@ -41,7 +49,16 @@ class BootReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Config found, starting gateway")
                 val port = prefs.getInt("port", 5060)
                 val pass = prefs.getString("pass", "") ?: ""
-                startViaActivity(context, server, port, user, pass)
+                if (locked) {
+                    // No UI can come up before the first unlock, so start the
+                    // service directly; it falls back to systemExempted if the
+                    // call FGS types are refused and takes them on the first
+                    // call (GatewayService.promoteForCall).
+                    Log.i(TAG, "Locked boot: starting gateway service directly")
+                    GatewayService.start(context, server, port, user, pass)
+                } else {
+                    startViaActivity(context, server, port, user, pass)
+                }
             } else {
                 Log.i(TAG, "No config, skipping auto-start")
             }

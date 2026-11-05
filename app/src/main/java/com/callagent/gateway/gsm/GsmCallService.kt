@@ -21,6 +21,9 @@ class GsmCallService : InCallService() {
         Log.i(TAG, "Call added: number=$number state=$state")
 
         call.registerCallback(callCallback)
+        // If the gateway came up at boot as systemExempted (call types are
+        // refused from a boot receiver), take the call types now.
+        com.callagent.gateway.service.GatewayService.promoteForCall(this)
         GsmCallManager.onCallAdded(call, this)
     }
 

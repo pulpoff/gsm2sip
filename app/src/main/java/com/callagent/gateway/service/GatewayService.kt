@@ -310,6 +310,7 @@ class GatewayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
@@ -402,6 +403,39 @@ class GatewayService : Service() {
         }
     }
 
+    /** Foreground-service types currently held; 0 before the first call. */
+    @Volatile private var fgsTypes = 0
+
+    /**
+     * Enter (or stay in) the foreground with the call types if Android allows
+     * it, else as systemExempted.
+     *
+     * Android 15+ refuses phoneCall/microphone foreground services started
+     * from a boot receiver, and before the first unlock there is no UI to
+     * start from instead.  The gateway only needs to stay alive and
+     * registered until a call comes in; [promoteForCall] retries the call
+     * types then, when Telecom has bound our InCallService (an exempt start).
+     */
+    private fun goForeground(n: Notification, promote: Boolean = false) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(activeNotificationId(), n)
+            return
+        }
+        for (types in fgsTypesToTry(fgsTypes, promote, Build.VERSION.SDK_INT)) {
+            try {
+                startForeground(activeNotificationId(), n, types)
+                if (types != fgsTypes) {
+                    Log.i(TAG, "Foreground service types now 0x${Integer.toHexString(types)}")
+                    broadcastLog("Foreground: ${fgsTypesName(types)}")
+                }
+                fgsTypes = types
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "startForeground(${fgsTypesName(types)}) refused: ${e.message}")
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         clearStaleInitializing()
         when (intent?.action) {
@@ -427,19 +461,22 @@ class GatewayService : Service() {
                 }
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
+            ACTION_PROMOTE -> if (fgsTypes != 0 && fgsTypes != CALL_FGS_TYPES) {
+                goForeground(buildNotification(notifState), promote = true)
+            }
             ACTION_SMS_SEND -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 dispatchOutbox()
             }
             ACTION_SMS_REPORT -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 reportOutbox(intent.getStringExtra(EXTRA_SMS_ID))
             }
             ACTION_SMS_FLUSH -> {
                 // Started with startForegroundService() from the SMS receiver,
                 // so the foreground promise has to be honoured — with the
                 // notification it already has, not a new one.
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 flushSmsQueue("received")
             }
             ACTION_DIAL -> dialFromDialler(intent)
@@ -496,7 +533,7 @@ class GatewayService : Service() {
         // nothing until the service happened to restart.  Measured both ways
         // -- quiet to normal and back -- and neither moved without this.
         runCatching {
-            startForeground(activeNotificationId(), buildNotification(notifState))
+            goForeground(buildNotification(notifState))
             cancelStaleNotification()
         }.onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
         thread(name = "notif-visibility") {
@@ -1129,19 +1166,7 @@ class GatewayService : Service() {
         cfgPass = password
 
         notifStatusText = "Connecting"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting")
-            )
-        }
+        goForeground(buildNotification(NotifState.WARN, "Connecting"))
         acquireLocks()
         initializing.set(true)
         initializingSince = System.currentTimeMillis()
@@ -1390,6 +1415,7 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         unregisterNetworkCallback()
         stopGateway()
         super.onDestroy()
@@ -1780,6 +1806,44 @@ class GatewayService : Service() {
         const val NOTIFICATION_ID = 1
         /** Same notification, silent channel — see [activeNotificationId]. */
         const val NOTIFICATION_ID_QUIET = 2
+        const val ACTION_PROMOTE = "com.callagent.gateway.PROMOTE_FGS"
+
+        /** True between onCreate and onDestroy. */
+        @Volatile var running = false
+            private set
+
+        val CALL_FGS_TYPES =
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+
+        /** The type sets [goForeground] tries, in order.  Keeps what it has
+         *  unless asked to promote; falls back to systemExempted (API 34+). */
+        fun fgsTypesToTry(current: Int, promote: Boolean, sdk: Int): List<Int> {
+            val exempt = if (sdk >= 34) listOf(ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+                         else emptyList()
+            return if (current != 0 && !promote) listOf(current)
+                   else (listOf(CALL_FGS_TYPES) + exempt).distinct()
+        }
+
+        fun fgsTypesName(types: Int): String = when (types) {
+            CALL_FGS_TYPES -> "phoneCall|microphone"
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED -> "systemExempted"
+            else -> "0x${Integer.toHexString(types)}"
+        }
+
+        /** A call is arriving: retry the call FGS types if the service had to
+         *  fall back at boot.  The InCallService binding makes this an allowed
+         *  start.  No-op when the service is not running. */
+        fun promoteForCall(context: Context) {
+            if (!running) return
+            try {
+                context.startService(Intent(context, GatewayService::class.java)
+                    .setAction(ACTION_PROMOTE))
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not promote gateway service: ${e.message}")
+            }
+        }
+
         const val ACTION_START = "com.callagent.gateway.START"
         const val ACTION_STOP = "com.callagent.gateway.STOP"
         const val ACTION_RELOAD_STATS = "com.callagent.gateway.RELOAD_STATS"
