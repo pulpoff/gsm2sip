@@ -2249,7 +2249,7 @@ class RtpSession(
             val probe = RootShell.execForOutput(
                 "appops get ${uidProbe}$pkg RECORD_AUDIO 2>&1"
             )
-            if (probe.contains("allow", ignoreCase = true)) {
+            if (com.callagent.gateway.RecordAudioOp.satisfied(probe)) {
                 Log.d(TAG, "appops RECORD_AUDIO still allow — nothing to do")
                 return
             }
@@ -2276,7 +2276,7 @@ class RtpSession(
                 "appops get ${uidFlag}$pkg RECORD_AUDIO 2>&1"
             )
             val elapsed = System.currentTimeMillis() - t0
-            val allowed = result.contains("allow", ignoreCase = true)
+            val allowed = com.callagent.gateway.RecordAudioOp.afterGrant(result)
             Log.i(TAG, "appops re-assert: [$result] ok=$allowed (${elapsed}ms)")
 
             if (!allowed) {

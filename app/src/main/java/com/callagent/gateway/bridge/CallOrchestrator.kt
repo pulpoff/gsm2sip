@@ -1184,7 +1184,7 @@ class CallOrchestrator(
             val probe = RootShell.execForOutput(
                 "appops get ${uidProbe}$pkg RECORD_AUDIO 2>&1"
             )
-            if (probe.contains("allow", ignoreCase = true)) {
+            if (com.callagent.gateway.RecordAudioOp.satisfied(probe)) {
                 Log.i(TAG, "appops RECORD_AUDIO already allow — skipping grant")
                 return
             }
@@ -1207,7 +1207,7 @@ class CallOrchestrator(
                 "appops get ${uidFlag}$pkg RECORD_AUDIO 2>&1"
             )
             val elapsed = System.currentTimeMillis() - t0
-            val allowed = result.contains("allow", ignoreCase = true)
+            val allowed = com.callagent.gateway.RecordAudioOp.afterGrant(result)
             Log.i(TAG, "appops RECORD_AUDIO: [$result] ok=$allowed (${elapsed}ms)")
 
             if (!allowed) {

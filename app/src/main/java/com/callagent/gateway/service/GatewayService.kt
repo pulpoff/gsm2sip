@@ -1723,7 +1723,7 @@ class GatewayService : Service() {
                 "appops get ${uidFlag}$pkg RECORD_AUDIO 2>&1"
             )
             val elapsed = System.currentTimeMillis() - t0
-            val allowed = result.contains("allow", ignoreCase = true)
+            val allowed = com.callagent.gateway.RecordAudioOp.afterGrant(result)
             Log.i(TAG, "appops RECORD_AUDIO: [$result] ok=$allowed (${elapsed}ms)")
             broadcastLog("appops RECORD_AUDIO: ok=$allowed (${elapsed}ms)")
 
