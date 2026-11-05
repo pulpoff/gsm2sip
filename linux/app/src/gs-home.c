@@ -101,8 +101,8 @@ refresh_links (GsCtx *ctx)
 {
 	g_autofree char *m = gs_net_info_mobile_chip (ctx->net);
 	g_autofree char *w = gs_net_info_wifi_chip (ctx->net);
-	gtk_button_set_label (GTK_BUTTON (ctx->home->mobile), m && *m ? m : "—");
-	gtk_button_set_label (GTK_BUTTON (ctx->home->wifi), w && *w ? w : "—");
+	gtk_label_set_text (GTK_LABEL (gtk_button_get_child (GTK_BUTTON (ctx->home->mobile))), m && *m ? m : "—");
+	gtk_label_set_text (GTK_LABEL (gtk_button_get_child (GTK_BUTTON (ctx->home->wifi))), w && *w ? w : "—");
 }
 
 static gboolean
@@ -124,10 +124,14 @@ on_net_changed (GsNetInfo *net, gpointer data)
 static GtkWidget *
 link_chip (GCallback cb, GsCtx *ctx)
 {
-	GtkWidget *b = gtk_button_new_with_label ("—");
+	/* its own label, not the button's: gtk_button_set_label puts in a new
+	 * one, which doesn't ellipsize, and the window grew to fit both texts
+	 * (406 px on a 360 px phone) */
+	GtkWidget *b = gtk_button_new ();
 	gtk_widget_add_css_class (b, "gs-linkchip");
 	gtk_widget_set_hexpand (b, TRUE);
-	GtkWidget *l = gtk_button_get_child (GTK_BUTTON (b));
+	GtkWidget *l = gtk_label_new ("—");
+	gtk_button_set_child (GTK_BUTTON (b), l);
 	gtk_label_set_ellipsize (GTK_LABEL (l), PANGO_ELLIPSIZE_END);
 	gtk_label_set_xalign (GTK_LABEL (l), 0);
 	gtk_label_set_single_line_mode (GTK_LABEL (l), TRUE);
