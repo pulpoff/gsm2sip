@@ -113,10 +113,14 @@ first line of every SIP message.
 **The phone's own dialler has to be off while the gateway runs.** GNOME
 Calls (and callaudiod) see the same ModemManager calls the gateway does:
 left running, they ring the phone, may answer, and switch the call audio
-routing under the gateway; Chatty takes the SMS off the modem. The app's
-Enabled switch does this both ways (below). By hand it is
-`systemctl --user mask --now calls-daemon.service sm.puri.Chatty-daemon.service`,
-and `unmask` + `start` to get the phone back.
+routing under the gateway; Chatty takes the SMS off the modem. The same goes
+for gnome-phone's Phone and Messaging services, which replace Calls and Chatty
+where they are installed (`neo-dialer-calls`, `neo-messaging-sms`; Calls and
+Chatty then stay masked). The app's Enabled switch does this both ways (below),
+for whichever pair the phone uses. By hand it is
+`systemctl --user mask --now calls-daemon.service sm.puri.Chatty-daemon.service`
+(or `neo-dialer-calls.service neo-messaging-sms.service`), and `unmask` +
+`start` to get the phone back.
 
 ## The app and the D-Bus interface
 

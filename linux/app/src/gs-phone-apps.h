@@ -1,9 +1,10 @@
-/* The phone's own Phone and Messages apps — GNOME Calls and Chatty, as the
- * session's calls-daemon and sm.puri.Chatty-daemon user units.  While
- * gsm2sipd holds the modem they must not run: Calls would ring and answer
- * the same call, Chatty would take the SMS off the modem.  So the Enabled
- * switch holds them (stopped and masked, autostart hidden) and gives them
- * back (unmasked and started).  The user's own systemd, no root. */
+/* The phone's own Phone and Messages apps, as the session's user units: the
+ * neo Phone and Messaging services (neo-dialer-calls, neo-messaging-sms)
+ * where they are installed, else GNOME Calls and Chatty (calls-daemon,
+ * sm.puri.Chatty-daemon).  While gsm2sipd holds the modem they must not run:
+ * they would ring and answer the same call, and take the SMS off the modem.
+ * So the Enabled switch holds them (stopped and masked, autostart hidden) and
+ * gives them back (unmasked and started).  The user's own systemd, no root. */
 #pragma once
 #include <gio/gio.h>
 

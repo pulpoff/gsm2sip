@@ -2,11 +2,16 @@
 #include <glib/gstdio.h>
 #include <string.h>
 
-static const struct {
+typedef struct {
 	const char *unit, *autostart;
-} apps[] = {
-	{ "calls-daemon.service", "org.gnome.Calls-daemon.desktop" },
-	{ "sm.puri.Chatty-daemon.service", "sm.puri.Chatty-daemon.desktop" },
+	gboolean neo;
+} PhoneApp;
+
+static const PhoneApp all_apps[] = {
+	{ "neo-dialer-calls.service", NULL, TRUE },
+	{ "neo-messaging-sms.service", NULL, TRUE },
+	{ "calls-daemon.service", "org.gnome.Calls-daemon.desktop", FALSE },
+	{ "sm.puri.Chatty-daemon.service", "sm.puri.Chatty-daemon.desktop", FALSE },
 };
 
 /* what tells our overrides from a file the user wrote */
@@ -15,7 +20,8 @@ static const struct {
 static gboolean
 unit_installed (const char *unit)
 {
-	static const char *const dirs[] = { "/usr/lib/systemd/user", "/lib/systemd/user", "/etc/systemd/user" };
+	static const char *const dirs[] = { "/usr/lib/systemd/user", "/lib/systemd/user", "/etc/systemd/user",
+					    "/usr/local/lib/systemd/user" };
 	for (gsize i = 0; i < G_N_ELEMENTS (dirs); i++) {
 		g_autofree char *p = g_build_filename (dirs[i], unit, NULL);
 		if (g_file_test (p, G_FILE_TEST_EXISTS))
@@ -24,11 +30,36 @@ unit_installed (const char *unit)
 	return FALSE;
 }
 
+/* The apps the switch holds and gives back: the neo ones once installed.
+ * Their install masks Calls and Chatty for good, so giving those back too
+ * would have two apps ring the same call. */
+static gboolean
+use_neo (void)
+{
+	for (gsize i = 0; i < G_N_ELEMENTS (all_apps); i++)
+		if (all_apps[i].neo && unit_installed (all_apps[i].unit))
+			return TRUE;
+	return FALSE;
+}
+
+static GPtrArray *
+phone_apps (void)
+{
+	GPtrArray *a = g_ptr_array_new ();
+	gboolean neo = use_neo ();
+	for (gsize i = 0; i < G_N_ELEMENTS (all_apps); i++)
+		if (all_apps[i].neo == neo && unit_installed (all_apps[i].unit))
+			g_ptr_array_add (a, (gpointer)&all_apps[i]);
+	return a;
+}
+
+#define APP(a, i) ((const PhoneApp *)(a)->pdata[i])
+
 gboolean
 gs_phone_apps_installed (void)
 {
-	for (gsize i = 0; i < G_N_ELEMENTS (apps); i++)
-		if (unit_installed (apps[i].unit))
+	for (gsize i = 0; i < G_N_ELEMENTS (all_apps); i++)
+		if (unit_installed (all_apps[i].unit))
 			return TRUE;
 	return FALSE;
 }
@@ -36,15 +67,14 @@ gs_phone_apps_installed (void)
 gboolean
 gs_phone_apps_held (void)
 {
-	for (gsize i = 0; i < G_N_ELEMENTS (apps); i++) {
-		if (!unit_installed (apps[i].unit))
-			continue;
-		g_autofree char *p = g_build_filename (g_get_user_config_dir (), "systemd", "user", apps[i].unit, NULL);
+	g_autoptr (GPtrArray) apps = phone_apps ();
+	for (guint i = 0; i < apps->len; i++) {
+		g_autofree char *p = g_build_filename (g_get_user_config_dir (), "systemd", "user", APP (apps, i)->unit, NULL);
 		g_autofree char *target = g_file_read_link (p, NULL);
 		if (!target || strcmp (target, "/dev/null"))
 			return FALSE;
 	}
-	return gs_phone_apps_installed ();
+	return apps->len > 0;
 }
 
 /* Hidden autostart entries too, for a session that starts them without
@@ -53,14 +83,16 @@ static void
 autostart_set (gboolean hold)
 {
 	g_autofree char *dir = g_build_filename (g_get_user_config_dir (), "autostart", NULL);
-	for (gsize i = 0; i < G_N_ELEMENTS (apps); i++) {
-		if (!unit_installed (apps[i].unit))
+	g_autoptr (GPtrArray) apps = phone_apps ();
+	for (guint i = 0; i < apps->len; i++) {
+		const char *autostart = APP (apps, i)->autostart;
+		if (!autostart)
 			continue;
-		g_autofree char *p = g_build_filename (dir, apps[i].autostart, NULL);
+		g_autofree char *p = g_build_filename (dir, autostart, NULL);
 		g_autofree char *have = NULL;
 		gboolean ours = g_file_get_contents (p, &have, NULL, NULL) && strstr (have, MARKER);
 		if (hold && !have) {
-			g_autofree char *name = g_strndup (apps[i].autostart, strlen (apps[i].autostart) - strlen (".desktop"));
+			g_autofree char *name = g_strndup (autostart, strlen (autostart) - strlen (".desktop"));
 			g_autofree char *text = g_strdup_printf ("[Desktop Entry]\nType=Application\nName=%s\n"
 								 "# " MARKER "; the gsm2sip app's Enabled switch removes it\n"
 								 "Hidden=true\n", name);
@@ -167,9 +199,9 @@ gs_phone_apps_hold_async (gboolean hold, GCancellable *cancel, GAsyncReadyCallba
 	j->steps = g_ptr_array_new_with_free_func ((GDestroyNotify)step_free);
 	GVariantBuilder units;
 	g_variant_builder_init (&units, G_VARIANT_TYPE ("as"));
-	for (gsize i = 0; i < G_N_ELEMENTS (apps); i++)
-		if (unit_installed (apps[i].unit))
-			g_variant_builder_add (&units, "s", apps[i].unit);
+	g_autoptr (GPtrArray) apps = phone_apps ();
+	for (guint i = 0; i < apps->len; i++)
+		g_variant_builder_add (&units, "s", APP (apps, i)->unit);
 	GVariant *list = g_variant_builder_end (&units);
 	g_variant_ref_sink (list);
 	if (hold) {

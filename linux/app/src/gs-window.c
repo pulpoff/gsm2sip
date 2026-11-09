@@ -159,7 +159,7 @@ on_held (GObject *src, GAsyncResult *res, gpointer data)
 	Switch *sw = data;
 	g_autoptr (GError) err = NULL;
 	if (!gs_phone_apps_hold_finish (res, &err)) {
-		/* the gateway is not switched on over a Calls that still runs */
+		/* the gateway is not switched on over a phone app that still runs */
 		switch_done (sw, err->message);
 		return;
 	}
