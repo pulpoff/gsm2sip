@@ -534,9 +534,7 @@ gs_home_new (GsCtx *ctx)
 	gtk_box_append (GTK_BOX (content), h->list);
 	h->empty = gs_label ("No calls yet", "gs-empty");
 	gtk_box_append (GTK_BOX (content), h->empty);
-	GtkWidget *sw = gtk_scrolled_window_new ();
-	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (sw), content);
+	GtkWidget *sw = gs_scroller (content);
 	gtk_widget_set_vexpand (sw, TRUE);
 	gtk_box_append (GTK_BOX (page), sw);
 	return page;

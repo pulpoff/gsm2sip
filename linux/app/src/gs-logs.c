@@ -152,10 +152,8 @@ gs_logs_new (GsCtx *ctx)
 	gtk_text_view_set_top_margin (GTK_TEXT_VIEW (l->view), 8);
 	gtk_text_view_set_bottom_margin (GTK_TEXT_VIEW (l->view), 8);
 	l->buf = gtk_text_view_get_buffer (GTK_TEXT_VIEW (l->view));
-	l->scroller = gtk_scrolled_window_new ();
+	l->scroller = gs_scroller (l->view);
 	gtk_widget_add_css_class (l->scroller, "gs-logpane");
-	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (l->scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (l->scroller), l->view);
 	gtk_widget_set_vexpand (l->scroller, TRUE);
 	gtk_widget_set_margin_start (l->scroller, 14);
 	gtk_widget_set_margin_end (l->scroller, 14);

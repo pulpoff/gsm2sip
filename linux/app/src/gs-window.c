@@ -1,6 +1,9 @@
 #include "gs-window.h"
 #include "gs-phone-apps.h"
 #include <string.h>
+#ifdef HAVE_SPONGY
+#include <spongy-gtk.h>
+#endif
 
 void
 gs_ctx_toast (GsCtx *ctx, const char *text, gboolean long_toast)
@@ -47,6 +50,22 @@ gs_label (const char *text, const char *css_class)
 	if (css_class)
 		gtk_widget_add_css_class (l, css_class);
 	return l;
+}
+
+GtkWidget *
+gs_scroller (GtkWidget *child)
+{
+#ifdef HAVE_SPONGY
+	/* a GtkScrollable child (the log's text view) scrolls through its own
+	 * adjustment, so scrolling it to the end still works */
+	GtkWidget *sw = spongy_scroll_view_new ();
+	spongy_scroll_view_set_child (SPONGY_SCROLL_VIEW (sw), child);
+#else
+	GtkWidget *sw = gtk_scrolled_window_new ();
+	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (sw), child);
+#endif
+	return sw;
 }
 
 /* ---- what the daemon says ---- */

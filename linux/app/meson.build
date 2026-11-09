@@ -15,6 +15,13 @@ deps = [
   dependency('libadwaita-1', version: '>= 1.7'),
   dependency('gio-unix-2.0'),
 ]
+# the pages scroll with Android's fling and stretch at the ends where
+# gnome-phone's libspongy is installed (the phone's launcher and settings do)
+spongy = dependency('spongy-gtk-1', required: false)
+if spongy.found()
+  deps += spongy
+  add_project_arguments('-DHAVE_SPONGY', language: 'c')
+endif
 
 conf = configuration_data()
 conf.set_quoted('GS_APP_ID', app_id)

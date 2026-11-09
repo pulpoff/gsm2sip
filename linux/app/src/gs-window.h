@@ -43,6 +43,9 @@ void gs_ctx_set_enabled (GsCtx *ctx, gboolean enabled);
 /* a widget helper the pages share: an icon button of the header */
 GtkWidget *gs_icon_button (const char *icon, const char *tooltip, GCallback cb, gpointer data);
 GtkWidget *gs_label (const char *text, const char *css_class);
+/* a page's vertical scroller: Android's fling and stretch at the ends with
+ * libspongy, a GtkScrolledWindow without it */
+GtkWidget *gs_scroller (GtkWidget *child);
 
 /* pages */
 GtkWidget *gs_home_new (GsCtx *ctx);
