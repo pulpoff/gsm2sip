@@ -1333,6 +1333,20 @@ data class DeviceProfile(
                 append("echo -n 'IncallMM5='; tinymix 'Incall_Music Audio Mixer MultiMedia5' 2>&1; ")
                 append("echo -n 'VocRecCfg='; tinymix 'Voc Rec Config' 2>&1")
             },
+            // Announce the call so the HAL opens in-call recording. Unknown
+            // VSIDs are rejected and do not hurt the one that is actually up.
+            halCallActiveVsids = listOf("10c01000", "10dc1000", "11c05000", "11dc5000"),
+            captureSilenceFrames = 300,
+            mixerCaptureCmd = buildString {
+                append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
+                for (p in listOf(1, 2, 4, 8, 9)) {
+                    append("tinymix 'MultiMedia$p Mixer VOC_REC_UL' 0 0 2>/dev/null; ")
+                    append("tinymix 'MultiMedia$p Mixer VOC_REC_DL' 1 1 2>/dev/null; ")
+                }
+                for (i in 1..8) {
+                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
+                }
+            },
             musicVolPercent = 100,
             captureGain = 1,
             playbackGain = 1,
@@ -1341,7 +1355,7 @@ data class DeviceProfile(
             doubleTalkRatio = 1.5f,
             requireSpeakerMode = true,
             incallMusicParam = "incall_music_enabled",
-            voiceDownlinkWorks = false,
+            voiceDownlinkWorks = true,
             playbackToTelephonyTx = true,
             incallMusicBeforeTrack = true,
             playbackStereo = true,
