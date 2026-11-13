@@ -44,6 +44,10 @@ data class DeviceProfile(
      *  Voice Rx/Tx Device Mute are re-applied by the HAL when it programs the
      *  voice-call mixer path and had no lasting effect. */
     val silenceLocalAudio: Boolean = false,
+    /** Telecom and AudioManager mic mute, without muting STREAM_VOICE_CALL
+     *  and without tinymix. On kona the ALSA mic path is the same path as
+     *  incall_music, so the mixer mute takes the agent with it. */
+    val muteUplinkMic: Boolean = false,
     /** Start capture before the incall_music playback track is created.
      *  Pixel 4a needs this order (the modem TX path otherwise waits on a
      *  voice path not yet opened -> random one-way calls).  The S4 Mini
@@ -1346,12 +1350,6 @@ data class DeviceProfile(
                 for (i in 1..8) {
                     append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
                 }
-                // Speaker-mic capture into the AIF, not the voice TX path.
-                // TX_DEC volume and TX DMIC MUX stay untouched: zeroing those
-                // kills the uplink on this codec. Closing only this mixer
-                // keeps the room out while VOC_REC_DL still carries the caller.
-                append("tinymix 'TX_AIF1_CAP Mixer DEC1' 0 2>/dev/null; ")
-                append("tinymix 'TX_AIF1_CAP Mixer DEC2' 0 2>/dev/null; ")
             },
             musicVolPercent = 100,
             captureGain = 1,
@@ -1360,6 +1358,7 @@ data class DeviceProfile(
             echoGateThreshold = 300,
             doubleTalkRatio = 1.5f,
             requireSpeakerMode = true,
+            muteUplinkMic = true,
             incallMusicParam = "incall_music_enabled",
             voiceDownlinkWorks = true,
             playbackToTelephonyTx = true,

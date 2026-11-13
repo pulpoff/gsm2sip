@@ -174,13 +174,12 @@ media volume, which is why the caller heard the agent barely. The profile
 opens a stereo track onto Telephony Tx, cuts the handset with
 `Speaker_Mute_Switch` (not the voice-TX path — zeroing `TX DEC` drops the
 uplink on this codec), and lets the stream sit at full scale with unity
-gain. The room mic is the `DMIC*_MIXER` switches; `Voice Tx Device Mute`
-cannot be written here. Caller → agent is `VOICE_DOWNLINK` on MultiMedia9
-with `Voc Rec Config` 2. The speaker-mic path into that capture
-(`TX_AIF1_CAP Mixer DEC1/DEC2`) is closed; `TX_DEC` volume is left alone,
-because zeroing it drops the uplink on this codec. Verified on a live call
-with the handset in another room: the caller's voice still arrived after
-that mixer was off.
+gain. The room mic is muted through Telecom and `AudioManager`, not the
+mixer: closing `TX_AIF1_CAP Mixer DEC1/DEC2` kills `incall_music_uplink`
+on this codec, and muting `STREAM_VOICE_CALL` does the same. `TX_DEC`
+volume is left alone. Caller → agent is `VOICE_DOWNLINK` on MultiMedia9
+with `Voc Rec Config` 2. Verified on a live call: the caller heard the
+agent, and the rooted phone's mic did not leak.
 
 Everything the working profile depends on is generic Qualcomm audio, so other
 Qualcomm phones are plausible candidates — but the deciding factors live in the
