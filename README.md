@@ -63,7 +63,7 @@ remote actually offered rather than failing a call over a preference.
 | Ulefone Metal (`metal`) | MediaTek MT6753 (MT6735 family) | digital, via the modem's background-sound player | digital, via `VOICE_DOWNLINK` | working on madOS 8.1 (Android 8.1); verified on live calls, see [MediaTek](#mediatek-mt6735mt6753) |
 | Google Pixel 7 (`panther`) | Google Tensor G2 (gs201), AoC audio DSP | digital, via `incall playback` → `Telephony Tx` | digital, via `tinycap` on the AoC telephony-rx PCM (root) | **working** on LineageOS 24 (Android 17), verified on live VoLTE calls |
 | Samsung Galaxy S10e (`beyond0lte`) | Exynos 9820, CS47L93 | digital, played into the ABOX in place of the mic | digital, tapped off the ABOX downlink | **working** on LineageOS 23.2, with `abox_pos.ko` |
-| OnePlus 9R (`lemonades`) | Qualcomm SM8250 (`kona`) | digital, via `incall_music` → `Telephony Tx` | not checked on this build | agent → caller verified on LineageOS 24; see [kona](#oneplus-9r-kona) |
+| OnePlus 9R (`lemonades`) | Qualcomm SM8250 (`kona`) | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` / `VOC_REC_DL` | both directions verified on LineageOS 24; see [kona](#oneplus-9r-kona) |
 
 **The Poco X3 NFC is the reference device and works fully**: G.722 wideband in
 both directions, entirely through the modem, with the handset's own microphone
@@ -163,7 +163,7 @@ What has actually been checked so far:
 | Pixel 4a | SM7150 | Google | recognised by the check, used by a contributor |
 | Pixel 7 | Tensor G2 (gs201) | LineageOS 24 | fully working, verified on live VoLTE calls (both directions digital, SMS both ways) |
 | Galaxy S10e | Exynos 9820 | LineageOS 23.2 | working with `abox_pos.ko`, verified on a live call |
-| OnePlus 9R | SM8250 (kona) | LineageOS 24 | agent → caller verified on a live call; caller → agent not checked |
+| OnePlus 9R | SM8250 (kona) | LineageOS 24 | both directions verified on a live call |
 
 ### OnePlus 9R (kona)
 
@@ -175,7 +175,12 @@ opens a stereo track onto Telephony Tx, cuts the handset with
 `Speaker_Mute_Switch` (not the voice-TX path — zeroing `TX DEC` drops the
 uplink on this codec), and lets the stream sit at full scale with unity
 gain. The room mic is the `DMIC*_MIXER` switches; `Voice Tx Device Mute`
-cannot be written here. Caller → agent was not re-checked on this build.
+cannot be written here. Caller → agent is `VOICE_DOWNLINK` on MultiMedia9
+with `Voc Rec Config` 2. The speaker-mic path into that capture
+(`TX_AIF1_CAP Mixer DEC1/DEC2`) is closed; `TX_DEC` volume is left alone,
+because zeroing it drops the uplink on this codec. Verified on a live call
+with the handset in another room: the caller's voice still arrived after
+that mixer was off.
 
 Everything the working profile depends on is generic Qualcomm audio, so other
 Qualcomm phones are plausible candidates — but the deciding factors live in the

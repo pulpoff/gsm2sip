@@ -1346,6 +1346,12 @@ data class DeviceProfile(
                 for (i in 1..8) {
                     append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
                 }
+                // Speaker-mic capture into the AIF, not the voice TX path.
+                // TX_DEC volume and TX DMIC MUX stay untouched: zeroing those
+                // kills the uplink on this codec. Closing only this mixer
+                // keeps the room out while VOC_REC_DL still carries the caller.
+                append("tinymix 'TX_AIF1_CAP Mixer DEC1' 0 2>/dev/null; ")
+                append("tinymix 'TX_AIF1_CAP Mixer DEC2' 0 2>/dev/null; ")
             },
             musicVolPercent = 100,
             captureGain = 1,
