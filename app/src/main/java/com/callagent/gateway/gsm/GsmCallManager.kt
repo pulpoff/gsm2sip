@@ -630,7 +630,7 @@ object GsmCallManager {
                     service.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
                 }
 
-                if (profile.silenceLocalAudio) {
+                if (profile.silenceLocalAudio || profile.muteUplinkMic) {
                     // Mute through Telecom as well as AudioManager.  Telecom
                     // owns the call's mute state and re-applies it whenever the
                     // audio route changes, so an AudioManager-only mute can be
@@ -652,8 +652,11 @@ object GsmCallManager {
                     // MICBIAS=0) in mixerSetupCmd — no need for API-level mute.
                     // Profiles that silence the handset re-mute in
                     // enforceVolumes() immediately below.
-                    if (!profile.silenceLocalAudio) {
+                    if (!profile.silenceLocalAudio && !profile.muteUplinkMic) {
                         am.isMicrophoneMute = false
+                    } else if (profile.muteUplinkMic) {
+                        am.isMicrophoneMute = true
+                        appLog("Uplink mic muted via AudioManager")
                     }
                     enforceVolumes(am)
 

@@ -44,6 +44,10 @@ data class DeviceProfile(
      *  Voice Rx/Tx Device Mute are re-applied by the HAL when it programs the
      *  voice-call mixer path and had no lasting effect. */
     val silenceLocalAudio: Boolean = false,
+    /** Telecom and AudioManager mic mute, without muting STREAM_VOICE_CALL
+     *  and without tinymix. On kona the ALSA mic path is the same path as
+     *  incall_music, so the mixer mute takes the agent with it. */
+    val muteUplinkMic: Boolean = false,
     /** Start capture before the incall_music playback track is created.
      *  Pixel 4a needs this order (the modem TX path otherwise waits on a
      *  voice path not yet opened -> random one-way calls).  The S4 Mini
@@ -540,6 +544,13 @@ data class DeviceProfile(
                 // (gs101, zuma) are untested, so they are not matched here.
                 platform == "gs201" || socModel == "gs201" ->
                     tensorGs201()
+
+                // Snapdragon 865 / kona. OnePlus 9R (lemonades) is the device
+                // this was checked on. Lineage reports the platform as kona,
+                // not sm8250, so a chip-id match alone misses it.
+                platform == "kona" || socModel.contains("sm8250") ||
+                    device == "lemonades" || board == "lemonades" ->
+                    kona()
 
                 // Generic Qualcomm — try incall_music, skip WCD9304-specific controls
                 hw.contains("qcom") || hw.contains("qualcomm") ->
@@ -1279,6 +1290,84 @@ data class DeviceProfile(
             appopsPropagationMs = 300,
             )
         }
+
+        /** Snapdragon 865 / kona, checked on a OnePlus 9R (lemonades, Lineage 24).
+         *
+         *  genericQualcomm left the track mono, so AudioPolicy could not match
+         *  the stereo-only incall_music_uplink mixPort and handed it to the
+         *  speaker. The same stream was then held at 20% so the handset would
+         *  not blast, and the caller heard the agent barely. Cutting the
+         *  speaker (Speaker_Mute_Switch, not TX DEC — zeroing TX DEC kills the
+         *  uplink on this codec) lets the stream sit at full scale. Voice Tx
+         *  Device Mute cannot be written here; the room mic is the DMIC
+         *  switches. playbackGain stays 1: x2 already clips into the limiter. */
+        fun kona() = DeviceProfile(
+            name = "SM8250 (kona)",
+            mixerSetupCmd = buildString {
+                append("tinymix 'Speaker_Mute_Switch' On 2>/dev/null; ")
+                for (p in listOf(1, 2, 4, 5, 9)) {
+                    append("tinymix 'Incall_Music Audio Mixer MultiMedia$p' 1 1 2>/dev/null; ")
+                }
+                append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
+                for (i in 1..8) {
+                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
+                }
+            },
+            mixerRestoreCmd = buildString {
+                append("tinymix 'Speaker_Mute_Switch' Off 2>/dev/null; ")
+                for (p in listOf(1, 2, 4, 5, 9)) {
+                    append("tinymix 'Incall_Music Audio Mixer MultiMedia$p' 0 0 2>/dev/null; ")
+                }
+                for (i in 1..8) {
+                    append("tinymix 'DMIC${i}_MIXER Switch' On 2>/dev/null; ")
+                }
+            },
+            mixerIncallMusicCmd = buildString {
+                append("tinymix 'Speaker_Mute_Switch' On 2>/dev/null; ")
+                for (p in listOf(1, 2, 4, 5, 9)) {
+                    append("tinymix 'Incall_Music Audio Mixer MultiMedia$p' 1 1 2>/dev/null; ")
+                }
+                for (i in 1..8) {
+                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
+                }
+            },
+            mixerVerifyCmd = buildString {
+                append("echo -n 'SpkMute='; tinymix 'Speaker_Mute_Switch' 2>&1; ")
+                append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
+                append("echo -n 'IncallMM5='; tinymix 'Incall_Music Audio Mixer MultiMedia5' 2>&1; ")
+                append("echo -n 'VocRecCfg='; tinymix 'Voc Rec Config' 2>&1")
+            },
+            // Announce the call so the HAL opens in-call recording. Unknown
+            // VSIDs are rejected and do not hurt the one that is actually up.
+            halCallActiveVsids = listOf("10c01000", "10dc1000", "11c05000", "11dc5000"),
+            captureSilenceFrames = 300,
+            mixerCaptureCmd = buildString {
+                append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
+                for (p in listOf(1, 2, 4, 8, 9)) {
+                    append("tinymix 'MultiMedia$p Mixer VOC_REC_UL' 0 0 2>/dev/null; ")
+                    append("tinymix 'MultiMedia$p Mixer VOC_REC_DL' 1 1 2>/dev/null; ")
+                }
+                for (i in 1..8) {
+                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
+                }
+            },
+            musicVolPercent = 100,
+            captureGain = 1,
+            playbackGain = 1,
+            noiseGateThreshold = 0,
+            echoGateThreshold = 300,
+            doubleTalkRatio = 1.5f,
+            requireSpeakerMode = true,
+            muteUplinkMic = true,
+            incallMusicParam = "incall_music_enabled",
+            voiceDownlinkWorks = true,
+            playbackToTelephonyTx = true,
+            incallMusicBeforeTrack = true,
+            playbackStereo = true,
+            playbackLowLatency = false,
+            routeChangeDelayMs = 500,
+            appopsPropagationMs = 300,
+        )
 
         /** Generic Qualcomm device — tries incall_music, generic controls */
         fun genericQualcomm() = DeviceProfile(
