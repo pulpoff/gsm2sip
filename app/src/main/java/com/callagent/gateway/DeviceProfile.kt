@@ -353,6 +353,9 @@ data class DeviceProfile(
          * Re-probing is rate-limited to [TINYMIX_REPROBE_MS] so a genuinely
          * rootless device does not run four tinymix invocations per frame.
          */
+        val cachedTinymixBin: String
+            get() = cachedTinymix
+
         val tinymixBin: String
             get() {
                 cachedTinymix.let { if (it.isNotEmpty()) return it }
