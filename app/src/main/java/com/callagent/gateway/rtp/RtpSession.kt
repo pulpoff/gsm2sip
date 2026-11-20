@@ -232,7 +232,7 @@ class RtpSession(
         try {
             socket = DatagramSocket(null).apply {
                 reuseAddress = true
-                bind(InetSocketAddress(localPort))
+                bind(InetSocketAddress(this@RtpSession.localPort))
                 soTimeout = 100
                 receiveBufferSize = 262144
             }
