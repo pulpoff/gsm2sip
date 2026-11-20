@@ -545,11 +545,22 @@ data class DeviceProfile(
                 platform == "gs201" || socModel == "gs201" ->
                     tensorGs201()
 
-                // Snapdragon 865 / kona. OnePlus 9R (lemonades) is the device
-                // this was checked on. Lineage reports the platform as kona,
-                // not sm8250, so a chip-id match alone misses it.
-                platform == "kona" || socModel.contains("sm8250") ||
-                    device == "lemonades" || board == "lemonades" ->
+                // Snapdragon 865 / kona, checked only on the OnePlus 9R.
+                // Lineage 24 reports the platform as kona, not sm8250.
+                // Build.DEVICE is OnePlus9R and Build.BOARD is kona. The
+                // codename is ro.lineage.device, but that property is not
+                // visible to the app, and Build.FINGERPRINT is the vendor
+                // OnePlus9R_IND string, which does not contain lemonades.
+                // Match the codename where a ROM exposes it, and the 9R
+                // model numbers the app can always read. Another SM8250
+                // stays on genericQualcomm until someone tests it.
+                platform == "kona" && (
+                    device == "lemonades" || board == "lemonades" ||
+                        model == "le2100" || model == "le2101" ||
+                        sysProp("ro.lineage.device").lowercase() == "lemonades" ||
+                        sysProp("ro.build.flavor").lowercase().contains("lemonades") ||
+                        Build.FINGERPRINT.lowercase().contains("lemonades")
+                    ) ->
                     kona()
 
                 // Generic Qualcomm — try incall_music, skip WCD9304-specific controls
@@ -1300,18 +1311,23 @@ data class DeviceProfile(
          *  speaker (Speaker_Mute_Switch, not TX DEC — zeroing TX DEC kills the
          *  uplink on this codec) lets the stream sit at full scale. Voice Tx
          *  Device Mute cannot be written here; the room mic is the DMIC
-         *  switches. playbackGain stays 1: x2 already clips into the limiter. */
+         *  switches. Snapshot those switches before turning them off and put
+         *  the same values back: forcing all eight On leaves a switch that
+         *  was off by default on after the call. playbackGain stays 1: x2
+         *  already clips into the limiter. */
         fun kona() = DeviceProfile(
             name = "SM8250 (kona)",
             mixerSetupCmd = buildString {
+                append("mkdir -p /data/local/tmp/gsm2sip-dmic; ")
+                for (i in 1..8) {
+                    append("line=\$(tinymix 'DMIC${i}_MIXER Switch' 2>/dev/null); v=\${line##*: }; echo \"\$v\" | tr -d ' \\r' > /data/local/tmp/gsm2sip-dmic/${i}; ")
+                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
+                }
                 append("tinymix 'Speaker_Mute_Switch' On 2>/dev/null; ")
                 for (p in listOf(1, 2, 4, 5, 9)) {
                     append("tinymix 'Incall_Music Audio Mixer MultiMedia$p' 1 1 2>/dev/null; ")
                 }
                 append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
-                for (i in 1..8) {
-                    append("tinymix 'DMIC${i}_MIXER Switch' Off 2>/dev/null; ")
-                }
             },
             mixerRestoreCmd = buildString {
                 append("tinymix 'Speaker_Mute_Switch' Off 2>/dev/null; ")
@@ -1319,8 +1335,9 @@ data class DeviceProfile(
                     append("tinymix 'Incall_Music Audio Mixer MultiMedia$p' 0 0 2>/dev/null; ")
                 }
                 for (i in 1..8) {
-                    append("tinymix 'DMIC${i}_MIXER Switch' On 2>/dev/null; ")
+                    append("v=\$(tr -d ' \\r' < /data/local/tmp/gsm2sip-dmic/${i} 2>/dev/null); case \"\$v\" in On|Off|0|1) tinymix 'DMIC${i}_MIXER Switch' \"\$v\" ;; esac; ")
                 }
+                append("rm -f /data/local/tmp/gsm2sip-dmic/1 /data/local/tmp/gsm2sip-dmic/2 /data/local/tmp/gsm2sip-dmic/3 /data/local/tmp/gsm2sip-dmic/4 /data/local/tmp/gsm2sip-dmic/5 /data/local/tmp/gsm2sip-dmic/6 /data/local/tmp/gsm2sip-dmic/7 /data/local/tmp/gsm2sip-dmic/8; ")
             },
             mixerIncallMusicCmd = buildString {
                 append("tinymix 'Speaker_Mute_Switch' On 2>/dev/null; ")
@@ -1335,7 +1352,8 @@ data class DeviceProfile(
                 append("echo -n 'SpkMute='; tinymix 'Speaker_Mute_Switch' 2>&1; ")
                 append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
                 append("echo -n 'IncallMM5='; tinymix 'Incall_Music Audio Mixer MultiMedia5' 2>&1; ")
-                append("echo -n 'VocRecCfg='; tinymix 'Voc Rec Config' 2>&1")
+                append("echo -n 'VocRecCfg='; tinymix 'Voc Rec Config' 2>&1; ")
+                append("echo -n ' dmicSaved='; cat /data/local/tmp/gsm2sip-dmic/1 /data/local/tmp/gsm2sip-dmic/2 /data/local/tmp/gsm2sip-dmic/3 /data/local/tmp/gsm2sip-dmic/4 /data/local/tmp/gsm2sip-dmic/5 /data/local/tmp/gsm2sip-dmic/6 /data/local/tmp/gsm2sip-dmic/7 /data/local/tmp/gsm2sip-dmic/8 2>/dev/null")
             },
             // Announce the call so the HAL opens in-call recording. Unknown
             // VSIDs are rejected and do not hurt the one that is actually up.

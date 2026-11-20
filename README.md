@@ -167,8 +167,16 @@ What has actually been checked so far:
 
 ### OnePlus 9R (kona)
 
-LineageOS 24 reports the platform as `kona`, not `sm8250`, so the profile
-matches that. `genericQualcomm()` left the playback track mono, and the
+LineageOS 24 reports the platform as `kona`, not `sm8250`. The profile
+matches that platform only together with the `lemonades` codename
+(`ro.lineage.device`, the fingerprint, or `Build.DEVICE`/`BOARD` when a
+ROM puts the codename there). On the 9R nightly, `Build.DEVICE` is
+`OnePlus9R` and `Build.BOARD` is `kona`, so a device/board check alone
+would miss the phone that was tested. The app cannot read
+`ro.lineage.device`, and `Build.FINGERPRINT` on this nightly is the
+vendor `OnePlus9R_IND` string, so the match also accepts models
+`LE2100` and `LE2101`. Other SM8250 phones stay on
+`genericQualcomm()`. `genericQualcomm()` left the playback track mono, and the
 stereo-only `incall_music_uplink` mixPort then sent it to the speaker at 20%
 media volume, which is why the caller heard the agent barely. The profile
 opens a stereo track onto Telephony Tx, cuts the handset with
