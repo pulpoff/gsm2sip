@@ -353,6 +353,9 @@ data class DeviceProfile(
          * Re-probing is rate-limited to [TINYMIX_REPROBE_MS] so a genuinely
          * rootless device does not run four tinymix invocations per frame.
          */
+        val cachedTinymixBin: String
+            get() = cachedTinymix
+
         val tinymixBin: String
             get() {
                 cachedTinymix.let { if (it.isNotEmpty()) return it }
@@ -533,6 +536,9 @@ data class DeviceProfile(
                     device == "surya" || device == "karna" ||
                     device == "sunfish" || board == "sunfish" || hw == "sunfish" ->
                     sm6150()
+
+                platform == "sdm660" || board == "sdm660" || socMachine == "sdm660" ->
+                    sdm660()
 
                 // Google Tensor G2 (Pixel 7 / 7 Pro / 7a).  An exact match on
                 // the platform name: the SoC is Samsung-derived but the audio
@@ -1195,6 +1201,69 @@ data class DeviceProfile(
             audioRouteSettleDelayMs = 500,
             audioStopSettleDelayMs = 18_000,
             appopsPropagationMs = 300,
+        )
+
+        fun sdm660() = sm6150().copy(
+            name = "SDM660",
+            mixerSetupCmd = buildString {
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia9' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
+            },
+            mixerRestoreCmd = buildString {
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'ADC1 Volume' 4 2>/dev/null; ")
+                append("tinymix 'ADC2 Volume' 4 2>/dev/null; ")
+                append("tinymix 'ADC3 Volume' 4 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 0 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 0 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 0 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia9' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
+            },
+            mixerCaptureCmd = buildString {
+                append("tinymix 'Voice Rx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'ADC1 Volume' 0 2>/dev/null; ")
+                append("tinymix 'ADC2 Volume' 0 2>/dev/null; ")
+                append("tinymix 'ADC3 Volume' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("echo -n 'MM1_DL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'MM4_DL='; tinymix 'MultiMedia4 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'MM8_DL='; tinymix 'MultiMedia8 Mixer VOC_REC_DL' 2>&1")
+            },
+            mixerVerifyCmd = buildString {
+                append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
+                append("echo -n 'IncallMM2='; tinymix 'Incall_Music Audio Mixer MultiMedia2' 2>&1; ")
+                append("echo -n 'IncallMM5='; tinymix 'Incall_Music Audio Mixer MultiMedia5' 2>&1; ")
+                append("echo -n 'VocRecDL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'VocRecUL='; tinymix 'MultiMedia1 Mixer VOC_REC_UL' 2>&1")
+            },
         )
 
         /** Google Tensor G2 / gs201 (Pixel 7, LineageOS 24 on Android 17).

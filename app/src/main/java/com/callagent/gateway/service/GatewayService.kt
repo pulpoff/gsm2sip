@@ -313,6 +313,7 @@ class GatewayService : Service() {
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
+        GsmCallManager.runMixerDiscovery()
         thread(name = "notif-setup") {
             applyNotificationVisibility()
             silenceDefaultSmsApp()

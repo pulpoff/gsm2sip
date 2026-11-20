@@ -64,6 +64,8 @@ class SipClient(
     @Volatile private var lastRegisterTime = 0L
     /** Tracks last time we got ANY response from server (REGISTER, OPTIONS, etc.) */
     @Volatile private var lastServerResponseTime = 0L
+    @Volatile private var lastServerOptionsTime = 0L
+    @Volatile private var lastServerSilenceCheckTime = 0L
     @Volatile private var registrationLatch: CountDownLatch? = null
 
     /** Guards against two threads registering at once: start() launches a
@@ -275,6 +277,7 @@ class SipClient(
 
         // OPTIONS keepalive from server
         if (msg.isRequest && msg.method == "OPTIONS") {
+            lastServerOptionsTime = System.currentTimeMillis()
             val resp = SipBuilder.optionsResponse(msg, username, publicIp, advertisedPort)
             sendTo(resp, address)
             return
@@ -809,6 +812,17 @@ class SipClient(
                         }
                     }
 
+                    val now = System.currentTimeMillis()
+                    if (now - lastServerSilenceCheckTime >= SERVER_SILENCE_CHECK_INTERVAL_MS) {
+                        lastServerSilenceCheckTime = now
+                        val lastOptions = lastServerOptionsTime
+                        if (lastOptions > 0 && now - lastOptions > SERVER_SILENCE_LIMIT_MS) {
+                            uiLog("No OPTIONS from server for ${(now - lastOptions) / 1000}s, re-registering")
+                            lastServerOptionsTime = 0L
+                            lastRegisterTime = 0L
+                        }
+                    }
+
                     // The registration refresh is the only SIP request this
                     // gateway makes while idle.  It is authenticated, it is
                     // exactly what a registrar expects, and it doubles as the
@@ -908,6 +922,10 @@ class SipClient(
          * and inbound calls stop.
          */
         private const val NAT_KEEPALIVE_INTERVAL_MS = 25_000L
+
+        private const val SERVER_SILENCE_CHECK_INTERVAL_MS = 15_000L
+
+        private const val SERVER_SILENCE_LIMIT_MS = 75_000L
 
         /**
          * How often the monitor loop wakes.

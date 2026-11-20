@@ -27,7 +27,7 @@ silent.  Four chip families do it, each in its own way:
 
 | Chip family | Verified on | Agent → caller | Caller → agent |
 |---|---|---|---|
-| Qualcomm | Poco X3 NFC (SM6150/SM7150), Galaxy S4 Mini (MSM8960) | `incall_music` into the modem uplink | `VOICE_DOWNLINK`, `VOC_REC_*` |
+| Qualcomm | Poco X3 NFC (SM6150/SM7150), Galaxy S4 Mini (MSM8960), Redmi Note 7 (SDM660) | `incall_music` into the modem uplink | `VOICE_DOWNLINK`, `VOC_REC_*` |
 | Samsung Exynos | Galaxy S10e (Exynos 9820) | played into the ABOX DSP in place of the mic | tapped off the ABOX downlink |
 | MediaTek | Ulefone Metal (MT6753) | the modem's background-sound player | `VOICE_DOWNLINK` |
 | Google Tensor | Pixel 7 (gs201) | `incall playback` → Telephony Tx | the AoC telephony-rx PCM, over root |
@@ -60,6 +60,7 @@ remote actually offered rather than failing a call over a preference.
 | Xiaomi Poco X3 NFC (`surya`) | Qualcomm SM6150/SM7150, WCD9375 | digital, via `incall_music` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **fully working** on LineageOS and MIUI 14 |
 | Samsung Galaxy S4 Mini (`serranolte`) | Qualcomm MSM8960, WCD9304 | digital, via `incall_music` | digital, via `VOC_REC_*` | **fully working** |
 | Google Pixel 4a (`sunfish`) | Qualcomm SM7150 | — | — | contributed support; not verified here |
+| Xiaomi Redmi Note 7 (`lavender`) | Qualcomm SDM660 | digital, via `incall_music_uplink` → `Telephony Tx` | digital, via `VOICE_DOWNLINK` | **working** on MIUI 12.5 (Android 10), verified on a live outbound call |
 | Ulefone Metal (`metal`) | MediaTek MT6753 (MT6735 family) | digital, via the modem's background-sound player | digital, via `VOICE_DOWNLINK` | working on madOS 8.1 (Android 8.1); verified on live calls, see [MediaTek](#mediatek-mt6735mt6753) |
 | Google Pixel 7 (`panther`) | Google Tensor G2 (gs201), AoC audio DSP | digital, via `incall playback` → `Telephony Tx` | digital, via `tinycap` on the AoC telephony-rx PCM (root) | **working** on LineageOS 24 (Android 17), verified on live VoLTE calls |
 | Samsung Galaxy S10e (`beyond0lte`) | Exynos 9820, CS47L93 | digital, played into the ABOX in place of the mic | digital, tapped off the ABOX downlink | **working** on LineageOS 23.2, with `abox_pos.ko` |
@@ -160,6 +161,7 @@ What has actually been checked so far:
 | Poco X3 NFC | SM6150/SM7150 | Xiaomi MIUI 14 and LineageOS | fully working, verified on live calls |
 | Galaxy S4 Mini | MSM8960 | LineageOS 16 | fully working, verified on a live call |
 | Pixel 4a | SM7150 | Google | recognised by the check, used by a contributor |
+| Redmi Note 7 | SDM660 | Xiaomi MIUI 12.5 | working, verified on a live outbound call |
 | Pixel 7 | Tensor G2 (gs201) | LineageOS 24 | fully working, verified on live VoLTE calls (both directions digital, SMS both ways) |
 | Galaxy S10e | Exynos 9820 | LineageOS 23.2 | working with `abox_pos.ko`, verified on a live call |
 

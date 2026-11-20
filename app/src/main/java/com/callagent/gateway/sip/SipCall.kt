@@ -24,6 +24,8 @@ class SipCall(
     /** Set when any SIP response is received — stops INVITE retransmission (Timer A) */
     @Volatile var responseReceived = false
 
+    @Volatile private var ackReceived = false
+
     /** Final error status (>= 300) that ended this call, or 0 if none was received
      *  (timeout, transport failure).  Lets the orchestrator tell a deliberate
      *  rejection (486/603...) from a transient failure worth retrying. */
@@ -322,6 +324,7 @@ class SipCall(
 
             // ACK (for our 200 OK)
             msg.isRequest && msg.method == "ACK" -> {
+                ackReceived = true
                 Log.d(TAG, "Received ACK for call $callId")
                 return true
             }
@@ -394,6 +397,19 @@ class SipCall(
 
         state = State.ANSWERED
         Log.i(TAG, "Sent 200 OK for inbound call $callId (RTP port: $localRtpPort)")
+
+        Thread({
+            var delay = 500L
+            var elapsed = 0L
+            while (elapsed < 32000L) {
+                Thread.sleep(delay)
+                elapsed += delay
+                if (ackReceived || state != State.ANSWERED) break
+                Log.i(TAG, "200 OK retransmit for $callId (${delay}ms)")
+                sipClient.sendResponse(ok, address)
+                delay = minOf(delay * 2, 4000L)
+            }
+        }, "200OK-Retransmit").start()
     }
 
     /** Turn down an inbound INVITE we cannot bridge. */

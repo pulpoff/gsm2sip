@@ -587,10 +587,10 @@ object GsmCallManager {
 
     val MUSIC_VOL_PERCENT: Int get() = profile.musicVolPercent
 
-    /** Run mixer discovery once on first audio bridge setup. */
+    /** Run mixer discovery once. */
     @Volatile private var discoveryDone = false
 
-    private fun runMixerDiscovery() {
+    fun runMixerDiscovery() {
         if (discoveryDone) return
         discoveryDone = true
         Thread({
@@ -615,9 +615,6 @@ object GsmCallManager {
     /** Configure audio for GSM↔SIP bridge using the active device profile. */
     private fun configureAudioBridge() {
         try {
-            // Run ALSA mixer discovery on first call for diagnostics
-            runMixerDiscovery()
-
             inCallService?.let { service ->
                 val audioManager = service.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
@@ -676,7 +673,7 @@ object GsmCallManager {
                     //   - No ausage config files on this firmware
                     // The re-route served no purpose and broke speaker mode.
 
-                    val tinymixStatus = if (DeviceProfile.tinymixBin.isNotEmpty()) "available" else "NOT FOUND"
+                    val tinymixStatus = if (DeviceProfile.cachedTinymixBin.isNotEmpty()) "available" else "NOT FOUND"
                     val route = if (profile.requireSpeakerMode) "speaker" else "earpiece"
                     appLog("Audio bridge: $route, mode=${am.mode}, tinymix=$tinymixStatus, profile=${profile.name}")
                 }
