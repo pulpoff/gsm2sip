@@ -64,6 +64,9 @@ class SipClient(
     @Volatile private var lastRegisterTime = 0L
     /** Tracks last time we got ANY response from server (REGISTER, OPTIONS, etc.) */
     @Volatile private var lastServerResponseTime = 0L
+    @Volatile private var lastServerOptionsTime = 0L
+    @Volatile private var optionsIntervalMs = 0L
+    @Volatile private var lastServerSilenceCheckTime = 0L
     @Volatile private var registrationLatch: CountDownLatch? = null
 
     /** Guards against two threads registering at once: start() launches a
@@ -275,6 +278,18 @@ class SipClient(
 
         // OPTIONS keepalive from server
         if (msg.isRequest && msg.method == "OPTIONS") {
+            val now = System.currentTimeMillis()
+            val previous = lastServerOptionsTime
+            lastServerOptionsTime = now
+            if (previous > 0L) {
+                val gap = now - previous
+                if (gap >= SERVER_SILENCE_CHECK_INTERVAL_MS) {
+                    val current = optionsIntervalMs
+                    if (current == 0L || gap in (current / 2)..(current * 3 / 2)) {
+                        optionsIntervalMs = if (current == 0L) gap else (current * 3 + gap) / 4
+                    }
+                }
+            }
             val resp = SipBuilder.optionsResponse(msg, username, publicIp, advertisedPort)
             sendTo(resp, address)
             return
@@ -809,6 +824,20 @@ class SipClient(
                         }
                     }
 
+                    val now = System.currentTimeMillis()
+                    if (now - lastServerSilenceCheckTime >= SERVER_SILENCE_CHECK_INTERVAL_MS) {
+                        lastServerSilenceCheckTime = now
+                        val lastOptions = lastServerOptionsTime
+                        val interval = optionsIntervalMs
+                        val limit = (if (interval > 0L) interval else DEFAULT_OPTIONS_INTERVAL_MS) *
+                            MISSED_OPTIONS_BEFORE_REREGISTER
+                        if (lastOptions > 0L && now - lastOptions > limit) {
+                            uiLog("No OPTIONS from server for ${(now - lastOptions) / 1000}s, re-registering")
+                            lastServerOptionsTime = 0L
+                            lastRegisterTime = 0L
+                        }
+                    }
+
                     // The registration refresh is the only SIP request this
                     // gateway makes while idle.  It is authenticated, it is
                     // exactly what a registrar expects, and it doubles as the
@@ -908,6 +937,12 @@ class SipClient(
          * and inbound calls stop.
          */
         private const val NAT_KEEPALIVE_INTERVAL_MS = 25_000L
+
+        private const val DEFAULT_OPTIONS_INTERVAL_MS = 60_000L
+
+        private const val MISSED_OPTIONS_BEFORE_REREGISTER = 3
+
+        private const val SERVER_SILENCE_CHECK_INTERVAL_MS = 15_000L
 
         /**
          * How often the monitor loop wakes.
