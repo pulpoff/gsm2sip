@@ -19,17 +19,32 @@ import com.callagent.gateway.RootShell
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+        if (intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
+            intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
         ) {
-            Log.i(TAG, "Boot/update received, checking config...")
+            Log.i(TAG, "${intent.action} received, checking config...")
+            val locked = intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED
+            if (!locked) com.callagent.gateway.Storage.migrate(context)
+            if (intent.action == Intent.ACTION_BOOT_COMPLETED && GatewayService.running) {
+                // Already started at LOCKED_BOOT_COMPLETED, before the unlock.
+                // That start had no UI to come from, so the service has no
+                // microphone capability (see startViaActivity).  Bring the UI
+                // up now: MainActivity restarts the service from the
+                // foreground when no call is in progress.
+                if (GatewayService.startedBeforeUnlock) {
+                    Log.i(TAG, "Gateway running since locked boot — opening UI to restart it with mic access")
+                    launchUi(context)
+                }
+                return
+            }
 
             // Pre-grant RECORD_AUDIO at earliest boot moment.
             // GatewayService.startGateway() also grants it, but doing it
             // here gives extra lead time on cold boot before any call arrives.
             earlyPermissionSetup(context)
 
-            val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+            val prefs = com.callagent.gateway.Storage.prefs(context)
             if (!prefs.getBoolean("autoconnect", true)) {
                 Log.i(TAG, "Autoconnect disabled, skipping")
                 return
@@ -41,7 +56,16 @@ class BootReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Config found, starting gateway")
                 val port = prefs.getInt("port", 5060)
                 val pass = prefs.getString("pass", "") ?: ""
-                startViaActivity(context, server, port, user, pass)
+                if (locked) {
+                    // No UI can come up before the first unlock, so start the
+                    // service directly; it falls back to systemExempted if the
+                    // call FGS types are refused and takes them on the first
+                    // call (GatewayService.promoteForCall).
+                    Log.i(TAG, "Locked boot: starting gateway service directly")
+                    GatewayService.start(context, server, port, user, pass)
+                } else {
+                    startViaActivity(context, server, port, user, pass)
+                }
             } else {
                 Log.i(TAG, "No config, skipping auto-start")
             }
@@ -71,19 +95,31 @@ class BootReceiver : BroadcastReceiver() {
         context: Context, server: String, port: Int, user: String, pass: String
     ) {
         Thread({
-            val launched = try {
-                RootShell.exec(
-                    "am start -n ${context.packageName}/.MainActivity", timeoutMs = 10_000
-                ) == 0
-            } catch (e: Exception) {
-                Log.w(TAG, "Root activity launch failed: ${e.message}")
-                false
-            }
+            val launched = launchUiBlocking(context)
             if (launched) {
                 Log.i(TAG, "MainActivity launched via root — it will start the service")
             } else {
                 Log.w(TAG, "Could not launch UI; starting service directly (capture will be silenced)")
                 GatewayService.start(context, server, port, user, pass)
+            }
+        }, "boot-launch").start()
+    }
+
+    /** Start MainActivity through root (a background activity start from a
+     *  receiver is refused on Android 15+).  Blocks; call off the main thread. */
+    private fun launchUiBlocking(context: Context): Boolean = try {
+        RootShell.exec(
+            "am start -n ${context.packageName}/.MainActivity", timeoutMs = 10_000
+        ) == 0
+    } catch (e: Exception) {
+        Log.w(TAG, "Root activity launch failed: ${e.message}")
+        false
+    }
+
+    private fun launchUi(context: Context) {
+        Thread({
+            if (!launchUiBlocking(context)) {
+                Log.w(TAG, "Could not launch UI; capture stays silenced until the app is opened")
             }
         }, "boot-launch").start()
     }

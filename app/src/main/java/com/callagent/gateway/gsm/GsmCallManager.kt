@@ -495,7 +495,7 @@ object GsmCallManager {
         telecom: TelecomManager,
         outboundCid: String
     ): PhoneAccountHandle? {
-        val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context)
         val configuredFallback = prefs.getString("own_number", "")?.trim().orEmpty()
         val accounts = try {
             telecom.callCapablePhoneAccounts

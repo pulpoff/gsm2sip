@@ -310,6 +310,10 @@ class GatewayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
+        instance = this
+        startedBeforeUnlock =
+            getSystemService(android.os.UserManager::class.java)?.isUserUnlocked == false
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
@@ -402,6 +406,39 @@ class GatewayService : Service() {
         }
     }
 
+    /** Foreground-service types currently held; 0 before the first call. */
+    @Volatile private var fgsTypes = 0
+
+    /**
+     * Enter (or stay in) the foreground with the call types if Android allows
+     * it, else as systemExempted.
+     *
+     * Android 15+ refuses phoneCall/microphone foreground services started
+     * from a boot receiver, and before the first unlock there is no UI to
+     * start from instead.  The gateway only needs to stay alive and
+     * registered until a call comes in; [promoteForCall] retries the call
+     * types then, when Telecom has bound our InCallService (an exempt start).
+     */
+    private fun goForeground(n: Notification, promote: Boolean = false) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(activeNotificationId(), n)
+            return
+        }
+        for (types in fgsTypesToTry(fgsTypes, promote, Build.VERSION.SDK_INT)) {
+            try {
+                startForeground(activeNotificationId(), n, types)
+                if (types != fgsTypes) {
+                    Log.i(TAG, "Foreground service types now 0x${Integer.toHexString(types)}")
+                    broadcastLog("Foreground: ${fgsTypesName(types)}")
+                }
+                fgsTypes = types
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "startForeground(${fgsTypesName(types)}) refused: ${e.message}")
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         clearStaleInitializing()
         when (intent?.action) {
@@ -427,19 +464,22 @@ class GatewayService : Service() {
                 }
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
+            ACTION_PROMOTE -> if (fgsTypes != 0 && fgsTypes != CALL_FGS_TYPES) {
+                goForeground(buildNotification(notifState), promote = true)
+            }
             ACTION_SMS_SEND -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 dispatchOutbox()
             }
             ACTION_SMS_REPORT -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 reportOutbox(intent.getStringExtra(EXTRA_SMS_ID))
             }
             ACTION_SMS_FLUSH -> {
                 // Started with startForegroundService() from the SMS receiver,
                 // so the foreground promise has to be honoured — with the
                 // notification it already has, not a new one.
-                startForeground(activeNotificationId(), buildNotification(notifState))
+                goForeground(buildNotification(notifState))
                 flushSmsQueue("received")
             }
             ACTION_DIAL -> dialFromDialler(intent)
@@ -483,7 +523,7 @@ class GatewayService : Service() {
      * nothing until the next restart.
      */
     private fun applyConfigChange() {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         // Battery protection is independent of SIP validity, so refresh it
         // before checking whether the SIP fields are complete.
         // Re-post first, so toggling the status bar setting takes effect now
@@ -496,7 +536,7 @@ class GatewayService : Service() {
         // nothing until the service happened to restart.  Measured both ways
         // -- quiet to normal and back -- and neither moved without this.
         runCatching {
-            startForeground(activeNotificationId(), buildNotification(notifState))
+            goForeground(buildNotification(notifState))
             cancelStaleNotification()
         }.onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
         thread(name = "notif-visibility") {
@@ -606,7 +646,7 @@ class GatewayService : Service() {
      * can map an SMS to an assistant exactly as it maps a call.
      */
     private fun sendSmsOverSip(sip: SipClient, sms: PendingSms): Int {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val configuredOwn = ownNumberForSub(sms.subId)
         val target = sms.to.ifEmpty { configuredOwn }.ifEmpty { cfgUser }
         val targetUri = "sip:$target@$cfgServer"
@@ -659,7 +699,7 @@ class GatewayService : Service() {
         // Hebrew or Arabic message that would have arrived intact into a row
         // of '?', so it is sent through unchanged even with the setting on.
         val rawText = msg.body
-        val foldToAscii = getSharedPreferences("gateway", MODE_PRIVATE)
+        val foldToAscii = com.callagent.gateway.Storage.prefs(this)
             .getBoolean("translit_ascii", false)
         val folded =
             if (foldToAscii) com.callagent.gateway.sms.Transliterate.toAsciiOrNull(rawText) else null
@@ -897,7 +937,7 @@ class GatewayService : Service() {
      * single legacy value whenever the SIM cannot be resolved.
      */
     private fun ownNumberForSub(subId: Int): String {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val fallback = prefs.getString("own_number", "")?.trim().orEmpty()
         if (subId < 0) return fallback
         val slot = runCatching {
@@ -959,7 +999,7 @@ class GatewayService : Service() {
             broadcastLog("SMS report $event for ${sms.id} deferred — not registered")
             return false
         }
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val own = ownNumberForSub(sms.subId).ifEmpty { cfgUser }
         val body = org.json.JSONObject().apply {
             put("id", sms.id)
@@ -1090,7 +1130,7 @@ class GatewayService : Service() {
         currentCallStart = 0L
         currentAttemptStart = 0L
 
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "callagent.pro") ?: ""
         val port = intent?.getIntExtra(EXTRA_PORT, 5060) ?: prefs.getInt("port", 5060)
         val username = intent?.getStringExtra(EXTRA_USER) ?: prefs.getString("user", "") ?: ""
@@ -1129,19 +1169,7 @@ class GatewayService : Service() {
         cfgPass = password
 
         notifStatusText = "Connecting"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting")
-            )
-        }
+        goForeground(buildNotification(NotifState.WARN, "Connecting"))
         acquireLocks()
         initializing.set(true)
         initializingSince = System.currentTimeMillis()
@@ -1196,7 +1224,7 @@ class GatewayService : Service() {
         // SIP server on the same network needs no public address at all —
         // advertising one there would point the server at the far side of a
         // NAT it never has to cross.
-        val useStun = getSharedPreferences("gateway", MODE_PRIVATE)
+        val useStun = com.callagent.gateway.Storage.prefs(this)
             .getBoolean("use_stun", true)
         val stunResult = if (!useStun) null else try {
             StunClient.discover(network = activeNetwork)
@@ -1223,7 +1251,7 @@ class GatewayService : Service() {
         // TLS protects signalling only: REGISTER, INVITE and the SMS bodies
         // in MESSAGE.  RTP is deliberately left alone, so call audio is no
         // more or less private than it was on UDP.
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(this)
         val useTls = prefs.getBoolean("sip_tls", false)
         if (useTls) broadcastLog("SIP transport: TLS to $cfgServer:$cfgPort")
 
@@ -1390,6 +1418,9 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
+        if (instance === this) instance = null
+        startedBeforeUnlock = false
         unregisterNetworkCallback()
         stopGateway()
         super.onDestroy()
@@ -1780,6 +1811,63 @@ class GatewayService : Service() {
         const val NOTIFICATION_ID = 1
         /** Same notification, silent channel — see [activeNotificationId]. */
         const val NOTIFICATION_ID_QUIET = 2
+        const val ACTION_PROMOTE = "com.callagent.gateway.PROMOTE_FGS"
+
+        /** True between onCreate and onDestroy. */
+        @Volatile var running = false
+            private set
+
+        /**
+         * This instance was created before the first unlock (from
+         * LOCKED_BOOT_COMPLETED).  Android 12+ gives a foreground service
+         * started from the background no microphone capability, for its whole
+         * lifetime, so AudioRecord capture reads zeros until the service is
+         * started again while the app is in the foreground; MainActivity does
+         * that once after the unlock.
+         */
+        @Volatile var startedBeforeUnlock = false
+            private set
+
+        @Volatile private var instance: GatewayService? = null
+
+        /** A call is being set up or bridged right now. */
+        fun callInProgress(): Boolean {
+            val state = instance?.orchestrator?.bridgeState ?: return false
+            return state != CallOrchestrator.BridgeState.IDLE
+        }
+
+        val CALL_FGS_TYPES =
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+
+        /** The type sets [goForeground] tries, in order.  Keeps what it has
+         *  unless asked to promote; falls back to systemExempted (API 34+). */
+        fun fgsTypesToTry(current: Int, promote: Boolean, sdk: Int): List<Int> {
+            val exempt = if (sdk >= 34) listOf(ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+                         else emptyList()
+            return if (current != 0 && !promote) listOf(current)
+                   else (listOf(CALL_FGS_TYPES) + exempt).distinct()
+        }
+
+        fun fgsTypesName(types: Int): String = when (types) {
+            CALL_FGS_TYPES -> "phoneCall|microphone"
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED -> "systemExempted"
+            else -> "0x${Integer.toHexString(types)}"
+        }
+
+        /** A call is arriving: retry the call FGS types if the service had to
+         *  fall back at boot.  The InCallService binding makes this an allowed
+         *  start.  No-op when the service is not running. */
+        fun promoteForCall(context: Context) {
+            if (!running) return
+            try {
+                context.startService(Intent(context, GatewayService::class.java)
+                    .setAction(ACTION_PROMOTE))
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not promote gateway service: ${e.message}")
+            }
+        }
+
         const val ACTION_START = "com.callagent.gateway.START"
         const val ACTION_STOP = "com.callagent.gateway.STOP"
         const val ACTION_RELOAD_STATS = "com.callagent.gateway.RELOAD_STATS"

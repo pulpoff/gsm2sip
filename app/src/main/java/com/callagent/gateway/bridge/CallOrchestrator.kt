@@ -301,7 +301,7 @@ class CallOrchestrator(
      * SIM, in which case the configured value is used.
      */
     private fun inboundSipDestination(gsmCall: Call? = null): String {
-        val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context)
         val subscription = gsmCall?.details?.accountHandle?.let { account ->
             try {
                 val subId = com.callagent.gateway.gsm.GsmCallManager.subscriptionIdOf(context, account)
@@ -1052,7 +1052,7 @@ class CallOrchestrator(
             Log.w(TAG, "Bridge torn down during RTP start — stopping orphaned session")
             session.stop()
             if (activeRtpSession === session) activeRtpSession = null
-        } else if (context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+        } else if (com.callagent.gateway.Storage.prefs(context)
                 .getBoolean("call_monitor", false)) {
             // Settings → Call monitor: every call starts on Snoop.
             Log.i(TAG, "Call monitor on — snooping this call")

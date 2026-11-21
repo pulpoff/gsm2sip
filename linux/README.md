@@ -83,7 +83,9 @@ warns at start if group or others can read it). See
 `data/gateway.conf.example` for every key.
 
 To carry over a phone's Android settings, pull the app's
-`shared_prefs/gateway.xml` and convert it. The tool prints only which
+`/data/user_de/0/com.callagent.gateway/shared_prefs/gateway.xml` (as root:
+`adb shell su -c cat <path> > gateway.xml`; older builds kept it under
+`/data/data/com.callagent.gateway/`) and convert it. The tool prints only which
 settings it found, never their values, writes the file mode 600, and
 refuses to replace an existing one without `--force`:
 
