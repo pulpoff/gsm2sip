@@ -311,6 +311,9 @@ class GatewayService : Service() {
     override fun onCreate() {
         super.onCreate()
         running = true
+        instance = this
+        startedBeforeUnlock =
+            getSystemService(android.os.UserManager::class.java)?.isUserUnlocked == false
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
@@ -1416,6 +1419,8 @@ class GatewayService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (instance === this) instance = null
+        startedBeforeUnlock = false
         unregisterNetworkCallback()
         stopGateway()
         super.onDestroy()
@@ -1811,6 +1816,25 @@ class GatewayService : Service() {
         /** True between onCreate and onDestroy. */
         @Volatile var running = false
             private set
+
+        /**
+         * This instance was created before the first unlock (from
+         * LOCKED_BOOT_COMPLETED).  Android 12+ gives a foreground service
+         * started from the background no microphone capability, for its whole
+         * lifetime, so AudioRecord capture reads zeros until the service is
+         * started again while the app is in the foreground; MainActivity does
+         * that once after the unlock.
+         */
+        @Volatile var startedBeforeUnlock = false
+            private set
+
+        @Volatile private var instance: GatewayService? = null
+
+        /** A call is being set up or bridged right now. */
+        fun callInProgress(): Boolean {
+            val state = instance?.orchestrator?.bridgeState ?: return false
+            return state != CallOrchestrator.BridgeState.IDLE
+        }
 
         val CALL_FGS_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or

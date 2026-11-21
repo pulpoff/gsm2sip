@@ -437,9 +437,43 @@ class MainActivity : AppCompatActivity() {
         if (server.isEmpty() || user.isEmpty()) return
         val port = prefs.getInt("port", 5060)
         val pass = prefs.getString("pass", "") ?: ""
+        if (GatewayService.running && GatewayService.startedBeforeUnlock) {
+            restartWithMicAccess(server, port, user, pass)
+            return
+        }
         GatewayService.start(this, server, port, user, pass)
         running = true
         appendLog("Auto-starting gateway: $user@$server:$port")
+    }
+
+    /**
+     * The service was started before the first unlock, from the background,
+     * so Android gave it no microphone capability and AudioRecord capture
+     * reads zeros.  Start it again now, while this activity is in the
+     * foreground — unless a call is up, in which case the next time the app
+     * is opened will do it.
+     */
+    private fun restartWithMicAccess(server: String, port: Int, user: String, pass: String) {
+        if (GatewayService.callInProgress()) {
+            appendLog("Gateway started before unlock; call in progress, restart it later for mic access")
+            return
+        }
+        appendLog("Gateway started before unlock: restarting it once for microphone access")
+        GatewayService.stop(this)
+        running = true
+        val handler = Handler(Looper.getMainLooper())
+        var waitedMs = 0L
+        handler.post(object : Runnable {
+            override fun run() {
+                if (GatewayService.running && waitedMs < 5_000) {
+                    waitedMs += 200
+                    handler.postDelayed(this, 200)
+                    return
+                }
+                GatewayService.start(this@MainActivity, server, port, user, pass)
+                appendLog("Gateway restarted: $user@$server:$port")
+            }
+        })
     }
 
     // ── Tab Navigation ───────────────────────────────────
