@@ -19,8 +19,10 @@ import android.util.Log
  * it stays `foreground` whatever root sets — `appops set --uid ... allow` is
  * accepted and has no effect.  Re-running the grant (which kills the
  * permission controller each time) every few seconds is then pure cost, so
- * once a grant has left the uid mode at foreground the mode is treated as
- * [pinned] for the life of the process.  Call capture does not depend on it:
+ * once [PIN_AFTER] grants in a row have left the uid mode at foreground the
+ * mode is treated as [pinned] for the life of the process.  One failed grant
+ * is not enough: where the grant does work, a single one can still lose a
+ * race with PermissionController re-revoking at boot.  Call capture does not depend on it:
  * the telephony sources are checked against RECORD_INCOMING_PHONE_AUDIO,
  * which the privileged app holds as `allow`.
  */
@@ -42,9 +44,15 @@ object RecordAudioOp {
 
     fun isAllowed(output: String): Boolean = parse(output).effective == "allow"
 
-    /** The system holds the uid mode at foreground and a grant did not move it. */
+    /** Grants in a row that must leave the uid mode at foreground before it
+     *  is taken as held by the system. */
+    const val PIN_AFTER = 3
+
+    /** The system holds the uid mode at foreground and grants did not move it. */
     @Volatile var pinned = false
         private set
+
+    @Volatile private var heldInARow = 0
 
     /** Nothing to do: allowed, or pinned at foreground by the system. */
     fun satisfied(probe: String): Boolean {
@@ -52,16 +60,26 @@ object RecordAudioOp {
         return m.effective == "allow" || (pinned && m.uid == "foreground")
     }
 
-    /** Evaluate the readback after a grant; marks [pinned] when the grant
-     *  left the uid mode at foreground.  Returns whether it is allowed. */
+    /** Evaluate the readback after a grant; marks [pinned] once [PIN_AFTER]
+     *  grants in a row left the uid mode at foreground.  Returns whether it
+     *  is allowed. */
+    @Synchronized
     fun afterGrant(result: String): Boolean {
         val m = parse(result)
-        if (m.effective == "allow") return true
-        if (m.uid == "foreground" && !pinned) {
+        if (m.effective == "allow") {
+            heldInARow = 0
+            return true
+        }
+        if (m.uid != "foreground") {
+            heldInARow = 0
+            return false
+        }
+        heldInARow++
+        if (heldInARow >= PIN_AFTER && !pinned) {
             pinned = true
             log("RECORD_AUDIO uid mode is held at 'foreground' by the system " +
-                "(package mode ${m.pkg}); not re-granting again.  Call capture uses " +
-                "RECORD_INCOMING_PHONE_AUDIO.")
+                "($heldInARow grants in a row, package mode ${m.pkg}); not re-granting " +
+                "again.  Call capture uses RECORD_INCOMING_PHONE_AUDIO.")
         }
         return false
     }
@@ -72,5 +90,5 @@ object RecordAudioOp {
     }
 
     /** For tests. */
-    internal fun resetForTest() { pinned = false }
+    internal fun resetForTest() { pinned = false; heldInARow = 0 }
 }

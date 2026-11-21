@@ -33,12 +33,29 @@ class RecordAudioOpTest {
     }
 
     @Test
-    fun grantThatLeavesForegroundPinsAndStopsRetries() {
-        assertFalse(RecordAudioOp.satisfied(pixel))      // first time: grant
-        assertFalse(RecordAudioOp.afterGrant(pixel))     // grant had no effect
+    fun repeatedGrantsThatLeaveForegroundPinAndStopRetries() {
+        repeat(RecordAudioOp.PIN_AFTER - 1) {
+            assertFalse(RecordAudioOp.satisfied(pixel))  // grant
+            assertFalse(RecordAudioOp.afterGrant(pixel)) // no effect
+            assertFalse(RecordAudioOp.pinned)            // not yet
+        }
+        assertFalse(RecordAudioOp.afterGrant(pixel))
         assertTrue(RecordAudioOp.pinned)
         assertTrue(RecordAudioOp.satisfied(pixel))       // no more re-grants
         // A real revocation is still acted on.
         assertFalse(RecordAudioOp.satisfied("Uid mode: RECORD_AUDIO: ignore\nRECORD_AUDIO: ignore\n"))
+    }
+
+    @Test
+    fun oneGrantLosingARaceDoesNotPin() {
+        val allowed = "Uid mode: RECORD_AUDIO: allow\nRECORD_AUDIO: allow\n"
+        // Boot: the first grant is re-revoked before the readback.
+        assertFalse(RecordAudioOp.afterGrant(pixel))
+        assertFalse(RecordAudioOp.pinned)
+        // The next one sticks, which resets the count.
+        assertTrue(RecordAudioOp.afterGrant(allowed))
+        repeat(RecordAudioOp.PIN_AFTER - 1) { RecordAudioOp.afterGrant(pixel) }
+        assertFalse(RecordAudioOp.pinned)
+        assertTrue(RecordAudioOp.satisfied(allowed))
     }
 }
