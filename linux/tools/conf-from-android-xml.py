@@ -2,10 +2,12 @@
 """Write a gsm2sipd gateway.conf from the Android app's settings.
 
 The input is the app's shared preferences file,
-/data/data/com.callagent.gateway/shared_prefs/gateway.xml (pulled with
-`adb shell run-as` or from a backup).  The output holds the SIP password, so
-it is created with mode 600 and nothing it contains is ever printed: the tool
-reports which settings it found by name only.
+/data/user_de/0/com.callagent.gateway/shared_prefs/gateway.xml (pulled as
+root, e.g. `adb shell su -c cat ...`, or from a backup).  Builds before
+direct-boot support kept it in /data/data/com.callagent.gateway/shared_prefs/.
+The output holds the SIP password, so it is created with mode 600 and
+nothing it contains is ever printed: the tool reports which settings it
+found by name only.
 
     conf-from-android-xml.py gateway.xml gateway.conf [--force]
 """

@@ -61,6 +61,12 @@ object CallLogStore {
     @Volatile
     private var cachedEntries: List<CallLogEntry>? = null
 
+    /** Drop the in-memory copy; the prefs file was changed from outside
+     *  (Storage.migrate merging in the pre-unlock entries). */
+    fun invalidateCache() {
+        cachedEntries = null
+    }
+
     // Synchronized with [updateSms]: both are read-modify-write over the same
     // JSON blob, and a delivery report landing while a new entry is being
     // appended would otherwise drop one of the two writes.
