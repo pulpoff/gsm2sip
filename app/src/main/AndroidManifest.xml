@@ -38,6 +38,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Fallback type for the boot start: phoneCall/microphone are refused
+         from a boot receiver on Android 15+.  Privileged apps may hold it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Boot & wake -->
@@ -55,6 +58,7 @@
 
     <application
         android:name=".GatewayApp"
+        android:directBootAware="true"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -116,7 +120,7 @@
         <!-- Gateway foreground service: keeps SIP registered 24/7 -->
         <service
             android:name=".service.GatewayService"
-            android:foregroundServiceType="phoneCall|microphone"
+            android:foregroundServiceType="phoneCall|microphone|systemExempted"
             android:exported="false" />
 
         <!-- Incoming SMS on any SIM.  android:permission restricts the sender
@@ -147,6 +151,9 @@
             android:name=".service.BootReceiver"
             android:exported="true">
             <intent-filter>
+                <!-- Before the first unlock: the app is directBootAware and keeps its
+                     settings in device-protected storage. -->
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>

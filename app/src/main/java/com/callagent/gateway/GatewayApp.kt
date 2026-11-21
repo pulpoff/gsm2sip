@@ -15,5 +15,8 @@ class GatewayApp : Application() {
             StrictMode.ThreadPolicy.Builder().permitAll().build()
         )
         Log.i("GatewayApp", "SIP-GSM Gateway v${BuildConfig.VERSION_NAME} started")
+        // Settings live in device-protected storage so the gateway can run
+        // before the first unlock; carry over what an older build left in CE.
+        Storage.migrate(this)
     }
 }

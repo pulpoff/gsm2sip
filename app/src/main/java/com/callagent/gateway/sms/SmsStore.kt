@@ -44,7 +44,7 @@ object SmsStore {
 
     @Synchronized
     fun add(context: Context, sms: PendingSms) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         arr.put(toJson(sms))
         while (arr.length() > MAX_PENDING) arr.remove(0)
@@ -53,7 +53,7 @@ object SmsStore {
 
     @Synchronized
     fun pending(context: Context): List<PendingSms> {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         return (0 until arr.length()).mapNotNull { i ->
             runCatching { fromJson(arr.getJSONObject(i)) }.getOrNull()
@@ -63,7 +63,7 @@ object SmsStore {
     /** Drop one message — called only after the server has accepted it. */
     @Synchronized
     fun remove(context: Context, id: String) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         val kept = JSONArray()
         for (i in 0 until arr.length()) {
@@ -77,7 +77,7 @@ object SmsStore {
      *  as such rather than just retried forever in silence. */
     @Synchronized
     fun markAttempt(context: Context, id: String) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = com.callagent.gateway.Storage.prefs(context, PREFS)
         val arr = JSONArray(prefs.getString(KEY, "[]"))
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
