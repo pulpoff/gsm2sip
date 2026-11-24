@@ -513,6 +513,15 @@ data class DeviceProfile(
                 // Samsung Galaxy S10e Exynos (Exynos 9820)
                 board.contains("exynos9820") || hw.contains("exynos") && model.contains("sm-g970") ->
                     exynos9820()
+		
+		// Snapdragon 710/670.  The audio machine driver calls the card
+                // "sdm670-mtp-snd-card" even on a 710 (710 is a binned 670), so
+                // match both.  Mi 8 SE: BOARD="sdm710", DEVICE="sirius".
+                listOf(board, hw, platform, socModel).any {
+                    it.contains("sdm710") || it.contains("sdm670")
+                } || device == "sirius" || socId == "360" ||
+                    socMachine.contains("sdm710") || socMachine.contains("sdm670") ->
+                    sdm710()
 
                 // Snapdragon 7-series (SM6150/SM7150) with WCD9375 codec —
                 // e.g. Poco X3 NFC.  Same incall_music path as MSM8930 but a
@@ -1279,6 +1288,85 @@ data class DeviceProfile(
             appopsPropagationMs = 300,
             )
         }
+	
+	/**
+         * Snapdragon 710/670 (SDM710/SDM670) — Xiaomi Mi 8 SE (sirius).
+         * Verified: Android 10, WCD937x + TAS2557 smart-PA on PRI_MI2S.
+         *
+         * Unlike SM6150, in-call capture here is DIGITAL (VOC_REC_DL returns
+         * real samples), so the handset does not have to stay audible.  The
+         * loudspeaker is muted at the amplifier ('SmartPA Mute'): it sits below
+         * the AudioFlinger routing the app drives, so setSpeakerphoneOn(true)
+         * and the HAL re-applying its paths cannot undo it.  'Voice Rx Device
+         * Mute', COMP1/COMP2 and 'Speaker Boost' all failed to silence it.
+         *
+         * The playback front-end follows the negotiated codec (G.722/16k landed
+         * on MultiMedia5, G.711/8k on another port), so every Incall_Music and
+         * VOC_REC_DL port is opened — that is what makes the bridge survive a
+         * codec change.  'Voc Rec Config' is absent on this vendor image; the
+         * write is kept, silenced, for siblings that have it.
+         */
+        fun sdm710() = DeviceProfile(
+            name = "SDM710/SDM670 (TAS2557)",
+            mixerSetupCmd = buildString {
+                append("tinymix 'SmartPA Mute' 1 2>/dev/null; ")
+                append("tinymix 'Voice Tx Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia9' 1 2>/dev/null; ")
+                append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
+            },
+            mixerRestoreCmd = buildString {
+                append("tinymix 'SmartPA Mute' 0 2>/dev/null; ")
+                append("tinymix 'Voice Tx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null")
+            },
+            mixerIncallMusicCmd = buildString {
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
+                append("tinymix 'Incall_Music Audio Mixer MultiMedia9' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'SmartPA Mute' 1 2>/dev/null; ")
+                append("tinymix 'Voice Tx Mute' 0 4294967295 20 2>/dev/null")
+            },
+            mixerCaptureCmd = buildString {
+                append("tinymix 'Voc Rec Config' 2 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia4 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
+            },
+            mixerVerifyCmd = buildString {
+                append("echo -n 'SmartPAMute='; tinymix 'SmartPA Mute' 2>&1; ")
+                append("echo -n 'IncallMM5='; tinymix 'Incall_Music Audio Mixer MultiMedia5' 2>&1; ")
+                append("echo -n 'MM8DL='; tinymix 'MultiMedia8 Mixer VOC_REC_DL' 2>&1; ")
+                append("echo -n 'VoiceTxDevMute='; tinymix 'Voice Tx Device Mute' 2>&1")
+            },
+            musicVolPercent = 30,
+            captureGain = 2,
+            playbackGain = 2,
+            noiseGateThreshold = 150,
+            echoGateThreshold = 300,
+            doubleTalkRatio = 1.5f,
+            requireSpeakerMode = true,
+            incallMusicParam = "incall_music_enabled",
+            voiceDownlinkWorks = false,
+            routeChangeDelayMs = 500,
+            appopsPropagationMs = 300,
+        )
 
         /** Generic Qualcomm device — tries incall_music, generic controls */
         fun genericQualcomm() = DeviceProfile(
